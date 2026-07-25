@@ -739,6 +739,17 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { runs: getRecentRuns() });
   }
 
+  // GET /briefing — newest daily briefing markdown ($LIFE_REPO/briefings, default ~/life)
+  if (req.method === 'GET' && path === '/briefing') {
+    const dir = `${process.env.LIFE_REPO || `${HOME}/life`}/briefings`;
+    let file = null;
+    try {
+      file = readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().pop();
+    } catch {}
+    if (!file) return json(res, 404, { error: 'No briefing found' });
+    return json(res, 200, { date: file.replace('.md', ''), markdown: readFileSync(`${dir}/${file}`, 'utf8') });
+  }
+
   // GET /log/:id — uses claude logs <id> for bg sessions, file fallback
   if (req.method === 'GET' && path.startsWith('/log/')) {
     const id = path.slice(5).replace(/[^a-z0-9_\-]/gi, '');

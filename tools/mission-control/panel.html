@@ -576,6 +576,7 @@
     <button class="tab-btn" onclick="switchTab('pipelines'); loadPipelines();">⚙️ Pipelines</button>
     <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
     <button class="tab-btn" onclick="switchTab('scratchpads'); loadScratchpads();">📝 Tasks</button>
+    <button class="tab-btn" onclick="switchTab('briefing'); loadBriefing();">📰 Briefing</button>
   </nav>
 
   <main>
@@ -819,6 +820,15 @@
           <textarea id="scratchpad-message" rows="2" placeholder="Write message to add to scratchpad..."></textarea>
         </div>
       </div>
+    </section>
+  </div>
+  <!-- PANEL: BRIEFING -->
+  <div id="panel-briefing" class="panel-content">
+    <section class="glass-card">
+      <h2 id="briefing-title">📰 Daily Briefing</h2>
+      <pre id="briefing-body" class="terminal-box" style="max-height: 70vh;">
+        <div class="loading">Loading briefing...</div>
+      </pre>
     </section>
   </div>
   </main>
@@ -1432,6 +1442,18 @@
         }
       } catch (e) {
         body.innerHTML = '<div class="error">Error: ' + e.message + '</div>';
+      }
+    }
+
+    async function loadBriefing() {
+      const body = document.getElementById('briefing-body');
+      body.innerHTML = '<div class="loading">Loading briefing...</div>';
+      try {
+        const data = await api('/briefing');
+        document.getElementById('briefing-title').textContent = '📰 Daily Briefing — ' + data.date;
+        body.textContent = data.markdown || 'Briefing is empty.';
+      } catch (e) {
+        body.innerHTML = '<div class="error">' + escapeHtml(e.message) + '</div>';
       }
     }
 
