@@ -4,6 +4,18 @@
 - Edit: `.agents/agents/<name>.md`
 - Sync to all CLIs: `node tools/sync-agents.js` (all platforms)
 - Verify: check `.agents/sync.log` for ERROR lines
+
+## Hook Deployment
+Hooks in `hooks/` do nothing until they are both **copied** to `~/.claude/hooks/` and
+**registered** under the `hooks` key of `~/.claude/settings.json`. One command does both:
+
+- Deploy + register: `node tools/deploy-hooks.js` (all platforms, idempotent)
+- Check for drift: `node tools/deploy-hooks.js --check` (exit 1 if out of sync)
+
+Run it after any change to `hooks/`. Registration was previously PowerShell-only
+(`sync_hooks_from_repo.ps1`), so on Linux the whole pipeline was installed-but-inert —
+`--check` in CI is what stops that recurring. The manifest lives in `HOOK_REGISTRY`
+in `tools/deploy-hooks.js`; add new hooks there, not to the .ps1.
 - Code-location searches ("where is X defined", "what calls Y"): prefer
   `caveman:cavecrew-investigator` over the generic `Explore` agent — same result, ~60% less
   context consumed by the tool-result injected back into the caller (#164).
