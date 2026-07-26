@@ -104,12 +104,15 @@ export const HOOK_REGISTRY = [
   { event: 'UserPromptSubmit', command: b('user-prompt-submit.sh'),             timeout: 5,  statusMessage: 'Registering prompt...' },
   { event: 'SessionEnd',       command: n('memory-capture-hook.js'),            timeout: 5,  statusMessage: 'Capturing memory...' },
   { event: 'SessionEnd',       command: b('session-close.sh'),                  timeout: 10, statusMessage: 'Finalizing session...' },
-  // routine-dispatch + tool-output-compress are Bash-scoped: their payload
-  // inspection only ever applies to Bash events (see the 2026-07-12 audit notes
-  // in sync_hooks_from_repo.ps1).
+  // routine-dispatch is Bash-scoped: its payload inspection only ever applies to
+  // Bash events (see the 2026-07-12 audit notes in the retired .ps1).
   { event: 'PostToolUse',      command: b('wip-checkpoint.sh'),                 timeout: 5,  statusMessage: 'Saving checkpoint...',          matcher: 'Write|Edit|NotebookEdit' },
   { event: 'PostToolUse',      command: n('routine-dispatch.js'),               timeout: 5,  statusMessage: 'Checking routines (Bash)...',   matcher: 'Bash' },
-  { event: 'PostToolUse',      command: n('tool-output-compress.js'),           timeout: 5,  statusMessage: 'Compressing output...',         matcher: 'Bash' },
+  // NOT registered: tool-output-compress.js. A PostToolUse hook can only *append*
+  // context — it cannot replace the tool result. The original output stays in the
+  // transcript in full and the hook adds a 3.2KB "compressed preview" on top, so
+  // it costs ~800 tokens per large Bash result instead of saving any. Measured on
+  // a 10,000-char payload: context grew by 3218 chars. See hooks/tool-output-compress.js.
   { event: 'PreToolUse',       command: b('guard-git.sh'),                      timeout: 5,  statusMessage: 'Guarding git...',               matcher: 'Bash' },
   { event: 'Stop',             command: n('sona-writeback-hook.js'),            timeout: 5,  statusMessage: 'Writing episodic memory...' },
   { event: 'Stop',             command: n('injection-feedback-hook.js'),        timeout: 5,  statusMessage: 'Scoring memory usefulness...' },

@@ -46,8 +46,14 @@ test('matcher groups stay separate', () => {
   const post = s.hooks.PostToolUse;
   const matchers = post.map(g => g.matcher).sort();
   assert.deepEqual(matchers, ['Bash', 'Write|Edit|NotebookEdit']);
-  // Both Bash-scoped hooks land in the one Bash group.
-  assert.equal(post.find(g => g.matcher === 'Bash').hooks.length, 2);
+  assert.equal(post.find(g => g.matcher === 'Bash').hooks.length, 1);
+});
+
+// A PostToolUse hook cannot replace a tool result, only append to it, so this one
+// added ~800 tokens per large Bash output while claiming to save them.
+test('tool-output-compress is deliberately not registered', () => {
+  assert.ok(!HOOK_REGISTRY.some(e => /tool-output-compress/.test(e.command)),
+    'tool-output-compress costs context rather than saving it — see deploy-hooks.js');
 });
 
 test('same command on two events registers under both', () => {
