@@ -22,12 +22,12 @@ import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, openSync, closeSync, mkdirSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
-import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionRegistry } from './session-registry.js';
 import { validateRepo } from './repo-validator.js';
-import { spawnAgyOneShotDirect, spawnAgyPersistent } from './agy-dispatcher.js';
+import { spawnAgyPersistent } from './agy-dispatcher.js';
 import { ipAllowed as ipAllowedFor, normalizeIp } from './ip-utils.js';
 import { lanAddresses, publicBaseUrl } from './url-utils.js';
 import { publish as publishEvent } from '../event-bus.js';
@@ -601,7 +601,7 @@ function routeGitHubEvent(event, payload) {
 
 // ── Request router ────────────────────────────────────────────────────────────
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   // Restricted CORS: only echo back an Access-Control-Allow-Origin when the
   // request's Origin header matches the configured ALLOWED_ORIGIN. No
   // wildcard is ever emitted — the panel itself is served same-origin and
@@ -632,10 +632,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url, `http://localhost`);
-  const path = url.pathname;
+  const pathname = url.pathname;
 
   // GitHub webhook — auth via HMAC sig, not Bearer
-  if (req.method === 'POST' && path === '/github') {
+  if (req.method === 'POST' && pathname === '/github') {
     const { raw, parsed } = await readBody(req);
     const sig = req.headers['x-hub-signature-256'] || '';
     if (!GH_SECRET || !verifyGitHubSig(raw, sig)) {
@@ -655,17 +655,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /favicon.ico — no auth; browsers auto-request it and 401s spam the console
-  if (req.method === 'GET' && path === '/favicon.ico') {
+  if (req.method === 'GET' && pathname === '/favicon.ico') {
     res.writeHead(204); res.end(); return;
   }
 
   // PWA static assets — no auth (contain no secrets); the browser fetches the
   // service worker and icon without the bearer key.
-  if (req.method === 'GET' && path === '/icon.svg') {
+  if (req.method === 'GET' && pathname === '/icon.svg') {
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' });
     res.end(ICON_SVG); return;
   }
-  if (req.method === 'GET' && path === '/sw.js') {
+  if (req.method === 'GET' && pathname === '/sw.js') {
     res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' });
     res.end(SW_JS); return;
   }
@@ -678,7 +678,7 @@ const server = http.createServer(async (req, res) => {
   clearAuthFails(clientIp);
 
   // GET / — status
-  if (req.method === 'GET' && path === '/') {
+  if (req.method === 'GET' && pathname === '/') {
     return json(res, 200, {
       status: 'ok', version: '1.0.0',
       daemon: readJSON(`${HOME}/.claude/daemon.status.json`),
@@ -687,23 +687,23 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /panel — mobile control panel
-  if (req.method === 'GET' && path === '/panel') {
+  if (req.method === 'GET' && pathname === '/panel') {
     return html(res, panelHTML(SECRET));
   }
 
   // GET /manifest.webmanifest — PWA manifest (auth'd: start_url embeds the key)
-  if (req.method === 'GET' && path === '/manifest.webmanifest') {
+  if (req.method === 'GET' && pathname === '/manifest.webmanifest') {
     res.writeHead(200, { 'Content-Type': 'application/manifest+json' });
     return res.end(JSON.stringify(manifest(SECRET)));
   }
 
   // GET /pipelines — self-hosted runner health + open PRs (for the Pipelines tab)
-  if (req.method === 'GET' && path === '/pipelines') {
+  if (req.method === 'GET' && pathname === '/pipelines') {
     return json(res, 200, await getPipelines());
   }
 
   // GET /repos — list spawnable repos
-  if (req.method === 'GET' && path === '/repos') {
+  if (req.method === 'GET' && pathname === '/repos') {
     const knownRepos = loadKnownRepos();
     const repos = (knownRepos.repos || []).map(r => ({
       slug: r.slug,
@@ -715,7 +715,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /sessions — live from claude agents --json + agy sessions from registry
-  if (req.method === 'GET' && path === '/sessions') {
+  if (req.method === 'GET' && pathname === '/sessions') {
     const claudeSessions = await getActiveSessions();
     const roster = getSessions(); // from roster.json as fallback
     const sessions = claudeSessions.length ? claudeSessions : roster;
@@ -730,17 +730,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /cost
-  if (req.method === 'GET' && path === '/cost') {
+  if (req.method === 'GET' && pathname === '/cost') {
     return json(res, 200, getCostSummary());
   }
 
   // GET /runs
-  if (req.method === 'GET' && path === '/runs') {
+  if (req.method === 'GET' && pathname === '/runs') {
     return json(res, 200, { runs: getRecentRuns() });
   }
 
   // GET /briefing — newest daily briefing markdown ($LIFE_REPO/briefings, default ~/life)
-  if (req.method === 'GET' && path === '/briefing') {
+  if (req.method === 'GET' && pathname === '/briefing') {
     const dir = `${process.env.LIFE_REPO || `${HOME}/life`}/briefings`;
     let file = null;
     try {
@@ -751,8 +751,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /log/:id — uses claude logs <id> for bg sessions, file fallback
-  if (req.method === 'GET' && path.startsWith('/log/')) {
-    const id = path.slice(5).replace(/[^a-z0-9_\-]/gi, '');
+  if (req.method === 'GET' && pathname.startsWith('/log/')) {
+    const id = pathname.slice(5).replace(/[^a-z0-9_\-]/gi, '');
     auditLog('view_log', req, { id });
     
     // Check if session exists in registry and has a logPath
@@ -786,7 +786,7 @@ const server = http.createServer(async (req, res) => {
   // POST /run — supports two request formats:
   //   1. NEW (Mission Control): { harness: "claude"|"agy", prompt, repo, agent?, model? }
   //   2. LEGACY (panel): { agent, prompt, cwd? }
-  if (req.method === 'POST' && path === '/run') {
+  if (req.method === 'POST' && pathname === '/run') {
     const { parsed } = await readBody(req);
     
     auditLog('run_session', req, {
@@ -858,7 +858,7 @@ const server = http.createServer(async (req, res) => {
           dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath);
         } else {
           // Dispatch agy
-          dispatchResult = await dispatchAgy(prompt, repoPath, model);
+          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model);
         }
 
         // Update registry with dispatch result
@@ -945,7 +945,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /health — health status
-  if (req.method === 'GET' && path === '/health') {
+  if (req.method === 'GET' && pathname === '/health') {
     const runningSessions = registry.getRunning();
     return json(res, 200, {
       status: 'ok',
@@ -958,7 +958,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // POST /stop — stop/kill a running session
-  if (req.method === 'POST' && path === '/stop') {
+  if (req.method === 'POST' && pathname === '/stop') {
     const { parsed } = await readBody(req);
     const { id } = parsed;
     if (!id) return json(res, 400, { error: 'id required' });
@@ -1012,7 +1012,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /scratchpads — list active task scratchpads
-  if (req.method === 'GET' && path === '/scratchpads') {
+  if (req.method === 'GET' && pathname === '/scratchpads') {
     const tasksDir = `${HOME}/agent-memory/nexus/tasks`;
     const list = [];
     try {
@@ -1039,7 +1039,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /scratchpad — get scratchpad content
-  if (req.method === 'GET' && path === '/scratchpad') {
+  if (req.method === 'GET' && pathname === '/scratchpad') {
     const project = url.searchParams.get('project') || '';
     const issue = url.searchParams.get('issue') || '';
     
@@ -1065,7 +1065,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // POST /scratchpad — append a message/entry to a task scratchpad
-  if (req.method === 'POST' && path === '/scratchpad') {
+  if (req.method === 'POST' && pathname === '/scratchpad') {
     const { parsed } = await readBody(req);
     const { project, issue, agent = 'Jarvis', message } = parsed;
     
@@ -1097,7 +1097,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // POST /memory/remember — save a durable fact
-  if (req.method === 'POST' && path === '/memory/remember') {
+  if (req.method === 'POST' && pathname === '/memory/remember') {
     const { parsed } = await readBody(req);
     const { fact, section = 'Session Notes', tier = 'personal', target = '' } = parsed;
     
@@ -1124,7 +1124,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /memory/search — scored synonym search for memory files
-  if (req.method === 'GET' && path === '/memory/search') {
+  if (req.method === 'GET' && pathname === '/memory/search') {
     const agent = url.searchParams.get('agent') || '';
     const query = url.searchParams.get('query') || '';
     
@@ -1149,7 +1149,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /memory/file — get memory file content securely
-  if (req.method === 'GET' && path === '/memory/file') {
+  if (req.method === 'GET' && pathname === '/memory/file') {
     const filePath = url.searchParams.get('path') || '';
     if (!filePath) return json(res, 400, { error: 'path parameter required' });
     
@@ -1174,6 +1174,19 @@ const server = http.createServer(async (req, res) => {
   }
 
   return json(res, 404, { error: 'Not found' });
+}
+
+// A throw inside handleRequest used to reject unhandled and take the whole
+// server process down (one bad request = fleet outage until systemd restarted
+// it). Catch here so a broken endpoint degrades to a 500 for that one request.
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch(err => {
+    console.error(`[handler] ${req.method} ${req.url} failed:`, err);
+    try {
+      if (!res.headersSent) json(res, 500, { error: 'Internal server error' });
+      else res.end();
+    } catch { /* response already destroyed */ }
+  });
 });
 
 server.listen(PORT, HOST, () => {
@@ -1194,11 +1207,14 @@ server.listen(PORT, HOST, () => {
   if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
     console.warn(
       `  WARNING: bound to ${HOST}, not loopback-only. Anyone who can reach this ` +
-      `host/port on the network can spawn agent runs if they obtain the bearer key. ` +
-      `Bearer-key auth (timing-safe) + a 100 req/min per-IP rate limit are the only ` +
-      `guards — there is no IP allowlist. Prefer an SSH tunnel or a trusted-LAN-only ` +
-      `network for phone access; rotate the key (~/.claude/remote-webhook.key) ` +
-      `periodically and keep its file ACL restricted to the owning user.\n`
+      `host/port on the network can spawn agent runs if they obtain the bearer key.\n` +
+      `  Guards active: timing-safe bearer auth, 100 req/min per-IP rate limit, ` +
+      `lockout after 10 failed auths/min, IP allowlist ${ALLOWLIST.length ? `(${ALLOWLIST.length} rule(s))` : 'NOT CONFIGURED'}.\n` +
+      (ALLOWLIST.length ? '' :
+        `  Set ~/.claude/webhook-allowlist.json {"allow":["192.168.1.0/24"]} to restrict by source IP.\n`) +
+      `  Prefer an SSH tunnel or a trusted-LAN-only network for phone access; rotate ` +
+      `the key (~/.claude/remote-webhook.key) periodically and keep its file ACL ` +
+      `restricted to the owning user.\n`
     );
   }
 });

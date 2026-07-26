@@ -1,115 +1,157 @@
 # Mission Control — Webhook Control Plane
 
-Remote dispatch server for Claude Code agent fleet management and Antigravity (agy) session handling. Enables phone/browser-based session spawning, monitoring, and cost tracking.
+Remote dispatch server for the Claude Code agent fleet and Antigravity (`agy`) sessions.
+Spawn, monitor, stop, and cost-track agent runs from a phone or browser.
 
-**Architecture:** Mission Control runs on a dedicated Linux host only. Windows is dev-only. See Components below.
+**Architecture:** production runs on a dedicated Linux host. Windows is dev-only.
 
 ## Files
 
-- **webhook-server.js** — LINUX HOST ONLY. HTTP REST API for agent dispatch, session management, GitHub webhooks, log streaming, and cost tracking
-- **agy-persistence.js** — LINUX HOST ONLY. Tmux-based wrapper for persistent agy background sessions (survives terminal close, enables session resumption). Graceful fallback to direct spawn if tmux unavailable (critical for Windows dev environments).
-- **README.md** — This file
-
-## Components
-
-### Linux Host Components
-- `webhook-server.js` — REST API server (requires Linux host with Claude CLI installed)
-- `agy-persistence.js` — Tmux session manager (requires tmux installed)
-
-Both components are **not compatible with Windows**. Windows developers use them in a dev environment only; production runs on dedicated Linux server.
-
-## Environment Variables
-
-### CLAUDE_BIN
-Optional. Defaults to `~/.local/bin/claude`. Set to override claude binary location on Linux host.
-
-Example:
-```bash
-export CLAUDE_BIN=/usr/local/bin/claude
-node webhook-server.js
-```
+| File | Role |
+|------|------|
+| `webhook-server.js` | HTTP REST API + panel host. Linux only. |
+| `panel.html` | Mobile web panel (served at `/panel`, installable as a PWA). |
+| `session-registry.js` | Durable session records; enforces 1 concurrent session per harness. |
+| `agy-dispatcher.js` | Positional-arg wrapper around the agy persistence layer. |
+| `agy-persistence.js` | Tmux-backed persistent agy sessions; falls back to direct spawn without tmux. |
+| `repo-validator.js` | Resolves a repo slug against the `known-repos.json` allowlist. |
+| `ip-utils.js` / `url-utils.js` | IP allowlist matching and public-URL derivation (unit tested). |
+| `install-local.sh` | **The** installer: key generation, systemd unit, firewall, optional runner. |
+| `install-runner.sh` | Registers the co-located GitHub Actions self-hosted runner. |
+| `claude-webhook.service` | systemd unit **template** — placeholders substituted by the installer. |
+| `mission-control-update.{service,timer}` | Optional daily `git pull` + restart. |
 
 ## Deployment
 
-### Production Setup (Mini-PC)
+Use the installer. Do **not** hand-copy `claude-webhook.service` — it contains
+`__PLACEHOLDER__` tokens that `install-local.sh` substitutes (user, absolute paths,
+node binary, bind address).
 
-1. Clone or sync the versioned repository to the mini-PC:
 ```bash
-# Clone the repository
-git clone git@github.com:Zene8/AgentSystem.git /home/natha/dev/AgentSystem
+git clone git@github.com:Zene8/AgentSystem.git ~/dev/AgentSystem
+cd ~/dev/AgentSystem
+bash tools/mission-control/install-local.sh
 ```
 
-2. Symlink or copy the systemd service file to `/etc/systemd/system/`:
+Defaults to a system service bound to `127.0.0.1:8765`. Useful flags:
+
+| Flag | Effect |
+|------|--------|
+| `--user` | Install as a `systemd --user` unit (no sudo; needs linger enabled). |
+| `--lan` | Bind `0.0.0.0` and open the port in UFW. Opt-in — see Security. |
+| `--bind <addr>` | Bind a specific address (e.g. a Tailscale IP). |
+| `--port <n>` | Override port 8765. |
+| `--no-service` | Set up key/config only; run the server by hand. |
+| `--with-runner` | Also register the GitHub Actions self-hosted runner. |
+| `--with-auto-update` | Daily timer that pulls `origin/main` and restarts. |
+
+Reaching it from a phone without exposing the port:
+
 ```bash
-sudo ln -sf /home/natha/dev/AgentSystem/tools/mission-control/claude-webhook.service /etc/systemd/system/
+ssh -L 8765:127.0.0.1:8765 <user>@<server>
 ```
 
-The service configuration uses the repository directory directly:
-```ini
-[Unit]
-Description=Claude Code Webhook Server
-After=network-online.target
+## Environment Variables
 
-[Service]
-Type=simple
-User=natha
-WorkingDirectory=/home/natha/dev/AgentSystem
-ExecStart=/usr/bin/node tools/mission-control/webhook-server.js
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-Environment=PORT=8765
-```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `8765` | Listen port. |
+| `HOST` | `127.0.0.1` | Bind address. Anything other than loopback prints a security warning. |
+| `CLAUDE_BIN` | `~/.local/bin/claude` | Claude CLI path. Server exits at boot if set but missing. |
+| `PUBLIC_URL` | — | Externally reachable base URL; used to build `logUrl` behind a proxy/Tailscale. |
+| `ALLOWED_ORIGIN` | — | Single origin allowed for CORS. `*` is never emitted. |
+| `GITHUB_WEBHOOK_SECRET` | — | HMAC secret for `POST /github`. Unset means every webhook is rejected. |
+| `GH_REPO` | `Zene8/AgentSystem` | Repo whose PRs + runner health `/pipelines` reports. |
+| `LIFE_REPO` | `~/life` | Root containing `briefings/` for `GET /briefing`. |
 
-3. Enable and start:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable claude-webhook
-sudo systemctl start claude-webhook
-```
+## API
 
-## API Quick Reference
+**Auth:** `Authorization: Bearer <key>` (key at `~/.claude/remote-webhook.key`), or
+`?key=<key>` for panel bookmarks. `POST /github` authenticates by HMAC signature
+instead. `/favicon.ico`, `/icon.svg`, and `/sw.js` are unauthenticated (no secrets).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | / | Service health |
-| GET | /panel | Mobile web panel |
-| GET | /sessions | List active sessions |
-| GET | /cost | Cost summary |
-| GET | /log/:id | Stream logs |
-| POST | /run | Spawn new session |
-| POST | /github | GitHub webhook receiver |
+| GET | `/` | Health + daemon status + session count. |
+| GET | `/health` | Detailed health (platform, node version, active sessions). |
+| GET | `/panel` | Mobile control panel. |
+| GET | `/manifest.webmanifest` | PWA manifest (auth'd — `start_url` embeds the key). |
+| GET | `/repos` | Spawnable repos from the `known-repos.json` allowlist. |
+| GET | `/sessions` | Active claude sessions + agy sessions from the registry. |
+| GET | `/runs` | Recent run log files. |
+| GET | `/log/:id` | Last 100 lines for a session (registry path, bg short-id, or file). |
+| GET | `/cost` | Today + 7-day spend summary. |
+| GET | `/pipelines` | Self-hosted runner health + open PRs (read-only `gh`). |
+| GET | `/briefing` | Newest daily briefing markdown. |
+| GET | `/scratchpads` | List active task scratchpads. |
+| GET | `/scratchpad?project=&issue=` | Scratchpad content. |
+| POST | `/scratchpad` | Append an entry. Body: `{project, issue, agent?, message}`. |
+| GET | `/memory/search?agent=&query=` | Scored memory-file search. |
+| GET | `/memory/file?path=` | Read a file. Confined to `~/agent-memory`. |
+| POST | `/memory/remember` | Save a durable fact. Body: `{fact, section?, tier?, target?}`. |
+| POST | `/run` | Spawn a session (see below). |
+| POST | `/stop` | Stop a session. Body: `{id}`. |
+| POST | `/github` | GitHub webhook receiver (HMAC-authenticated). |
 
-**Auth:** Authorization: Bearer <key from ~/.claude/remote-webhook.key>
+### POST /run
+
+Mission Control format — repo must be an allowlisted slug:
+
+```json
+{ "harness": "claude", "prompt": "review the schema", "repo": "genie", "agent": "pym" }
+{ "harness": "agy",    "prompt": "review the schema", "repo": "genie", "model": "gemini-2.0-flash" }
+```
+
+Legacy panel format (`{agent, prompt, cwd?}`) is still accepted and now routes
+through the same registry, so it obeys the same concurrency cap.
+
+Returns `202` with `{id, harness, repo, status, logUrl}`. Returns `409` if that
+harness already has a running session — the cap is 1 per harness.
+
+## Security
+
+Guards, in request order: optional IP allowlist → failed-auth lockout → per-IP rate
+limit (100 req/min) → timing-safe bearer auth.
+
+- **IP allowlist** — `~/.claude/webhook-allowlist.json`:
+  `{"allow": ["127.0.0.1", "192.168.1.0/24"]}`. Absent or empty means no IP filtering.
+- **Lockout** — 10 failed auths within 60s locks that IP for 15 min, doubling on
+  repeat lockouts up to 24h.
+- **Audit log** — `~/.claude/mission-control-audit.jsonl` records run/stop/log-view
+  and memory writes.
+- **Spawn guards** — identical `agent|cwd` spawns within 30s are deduped; beyond 5
+  concurrent background sessions the trigger is queued on the event bus rather than
+  dropped.
+
+Binding off-loopback exposes agent spawn to anyone who obtains the bearer key.
+Prefer an SSH tunnel or Tailscale; rotate `~/.claude/remote-webhook.key` periodically.
 
 ## agy Persistence
-
-The agy-persistence.js module provides tmux-based background execution for agy CLI:
 
 ```javascript
 import { spawnAgyPersistent, stopAgyPersistent } from './agy-persistence.js';
 
 const session = await spawnAgyPersistent({
-  prompt: "review schema",
-  repoPath: "/home/natha/dev/genie",
-  model: "gemini-2.0-flash",
+  prompt: 'review schema',
+  repoPath: '/home/nathan/dev/genie',
+  model: 'gemini-2.0-flash',
 });
 
-// Later: await stopAgyPersistent({ tmuxSessionName: session.tmuxSessionName });
+await stopAgyPersistent({ tmuxSessionName: session.tmuxSessionName });
 ```
+
+## Tests
+
+```bash
+npm run test:mission-control   # unit (registry/validator) + live HTTP endpoint tests
+```
+
+`tests/test_mission_control_http.js` boots the real server against a throwaway
+`HOME` and exercises the endpoints over HTTP. Unit tests alone previously missed a
+shadowed identifier that broke five endpoints and crashed the process.
 
 ## References
 
-- **Full spec:** docs/mission-control.md
-- **Session costs:** tools/session-cost.js
-- **Phone access:** tools/setup-phone-access.sh
-- **Issues:** #82–#88
-
-## Open Tasks
-
-- Issue #83: Security audit (TLS, auth)
-- Issue #85: Full agy dispatcher integration
-- Issue #86: Repo picker UI
-- Issue #87: Frontend
-- Issue #88: Boot resilience
+- **Full spec:** `docs/mission-control.md`
+- **Linux deploy guide:** `docs/mission-control-linux-deploy.md`
+- **Session costs:** `tools/session-cost.js`

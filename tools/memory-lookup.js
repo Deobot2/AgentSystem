@@ -119,11 +119,16 @@ if (!agentName) {
 
 const topN = parseInt(flags.top || '5');
 const showAll = !!flags.all;
+const jsonOut = !!flags.json;
 const memoryRoot = flags['memory-root']
   ? resolve(flags['memory-root'])
   : join(agentMemoryRoot(), agentName);
 
+// In --json mode "nothing to report" is an empty result, not an error. Callers
+// parse stdout (Mission Control's /memory/search does), so prose here or a
+// non-zero exit turns an empty search into a 500.
 if (!existsSync(memoryRoot)) {
+  if (jsonOut) { console.log('[]'); process.exit(0); }
   console.error(`No memory directory for agent "${agentName}" at ${memoryRoot}`);
   process.exit(1);
 }
@@ -145,12 +150,11 @@ const scored = files.map(f => {
   .slice(0, topN);
 
 if (scored.length === 0) {
-  console.log(`No memory files matched for "${rawKeywords.join(' ')}" (agent: ${agentName})`);
+  console.log(jsonOut ? '[]' : `No memory files matched for "${rawKeywords.join(' ')}" (agent: ${agentName})`);
   process.exit(0);
 }
 
 // Output: one path per line (for agent to read), plus scores if verbose
-const jsonOut = !!flags.json;
 if (jsonOut) {
   console.log(JSON.stringify(scored, null, 2));
 } else {

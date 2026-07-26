@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 
@@ -212,21 +212,28 @@ function syncCommands() {
   }
 }
 
-info('Starting cross-platform agent sync...');
+function main() {
+  info('Starting cross-platform agent sync...');
 
-// Rebuild the Antigravity plugin staging dir from scratch so removed agents don't linger.
-if (existsSync(ANTI_AGENTS_DIR)) rmSync(ANTI_AGENTS_DIR, { recursive: true, force: true });
+  // Rebuild the Antigravity plugin staging dir from scratch so removed agents don't linger.
+  if (existsSync(ANTI_AGENTS_DIR)) rmSync(ANTI_AGENTS_DIR, { recursive: true, force: true });
 
-const files = readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md'));
-for (const file of files) {
-  try { syncAgent(file); } catch (e) { warn(`Failed ${file}: ${e.message}`); }
+  const files = readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md'));
+  for (const file of files) {
+    try { syncAgent(file); } catch (e) { warn(`Failed ${file}: ${e.message}`); }
+  }
+
+  syncConfig();
+  syncCommands();
+  installAntigravityPlugin();
+
+  const claudeCount  = readdirSync(join(HOME, '.claude', 'agents')).filter(f => f.endsWith('.md')).length;
+  const antiCount    = existsSync(ANTI_AGENTS_DIR) ? readdirSync(ANTI_AGENTS_DIR).filter(f => f.endsWith('.md')).length : 0;
+
+  ok(`Sync complete -- Claude: ${claudeCount}, Antigravity: ${antiCount}`);
 }
 
-syncConfig();
-syncCommands();
-installAntigravityPlugin();
-
-const claudeCount  = readdirSync(join(HOME, '.claude', 'agents')).filter(f => f.endsWith('.md')).length;
-const antiCount    = existsSync(ANTI_AGENTS_DIR) ? readdirSync(ANTI_AGENTS_DIR).filter(f => f.endsWith('.md')).length : 0;
-
-ok(`Sync complete -- Claude: ${claudeCount}, Antigravity: ${antiCount}`);
+// Only sync when run as a script. Importing this module (e.g. sync-agents.test.js
+// pulling in the frontmatter helpers) used to rm -rf the Antigravity agents dir
+// and rewrite ~/.claude/agents as a side effect of `npm test`.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) main();
