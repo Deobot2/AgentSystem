@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * sync-agents.js -- Cross-platform agent sync (Linux/Mac/Windows)
- * Replicates sync_agents_from_repo.ps1 in Node.js.
+ * Syncs agent definitions to every CLI. Cross-platform; replaced the PowerShell script.
  * Usage: node tools/sync-agents.js
  */
 

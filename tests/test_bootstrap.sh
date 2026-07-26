@@ -6,18 +6,16 @@ fail() { echo "[FAIL] $1"; FAIL=$((FAIL+1)); }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_REPO_DIR="/tmp/test-bootstrap-repo-$(date +%s)"
+# Resolve the registry exactly the way bootstrap-repo.js does. Hardcoding
+# ~/.claude/agent-memory here silently pointed at a path that never existed, so the
+# "registry entry created" assertion always failed and cleanup() never removed the
+# test entry from the real registry.
 export REGISTRY
-REGISTRY=$(node -e "const os=require('os'),p=require('path');process.stdout.write(p.join(os.homedir(),'.claude','agent-memory','nexus','known-repos.json'))" 2>/dev/null)
-
-# Detect PowerShell executable (pwsh preferred, fallback to powershell.exe on Windows)
-if command -v pwsh &>/dev/null; then
-  PWSH="pwsh"
-elif command -v powershell.exe &>/dev/null; then
-  PWSH="powershell.exe"
-else
-  echo "ERROR: No PowerShell executable found (pwsh or powershell.exe)"
-  exit 1
-fi
+REGISTRY=$(node --input-type=module -e "
+  import { agentMemoryRoot } from '$REPO_ROOT/tools/graph/graph-lib.js';
+  import { join } from 'node:path';
+  process.stdout.write(join(agentMemoryRoot(), 'nexus', 'known-repos.json'));
+" 2>/dev/null)
 
 cleanup() {
   rm -rf "$TEST_REPO_DIR"
@@ -46,20 +44,9 @@ echo "console.log('hello')" > index.js
 git add . && git commit -q -m "initial"
 cd "$REPO_ROOT"
 
-# Convert paths to Windows-native format for PowerShell (cygpath available in Git Bash on Windows)
-if command -v cygpath &>/dev/null; then
-  WIN_TEST_REPO_DIR="$(cygpath -w "$TEST_REPO_DIR")"
-  WIN_REPO_ROOT="$(cygpath -w "$REPO_ROOT")"
-else
-  WIN_TEST_REPO_DIR="$TEST_REPO_DIR"
-  WIN_REPO_ROOT="$REPO_ROOT"
-fi
-
-echo "=== Test: bootstrap-repo.ps1 runs without error ==="
-$PWSH -File "$WIN_REPO_ROOT\\tools\\bootstrap-repo.ps1" \
-  -RepoPath "$WIN_TEST_REPO_DIR" \
-  -Slug "test-bootstrap-target" \
-  -PrimaryCli "claude" 2>/dev/null \
+echo "=== Test: bootstrap-repo.js runs without error ==="
+node "$REPO_ROOT/tools/bootstrap-repo.js" "$TEST_REPO_DIR" \
+  --slug=test-bootstrap-target 2>/dev/null \
   && ok "bootstrap exits 0" || fail "bootstrap exited non-zero"
 
 echo "=== Test: repo brain created ==="
@@ -82,10 +69,8 @@ node -e "
 " 2>/dev/null && ok "registry entry exists" || fail "registry entry missing"
 
 echo "=== Test: bootstrap is idempotent ==="
-$PWSH -File "$WIN_REPO_ROOT\\tools\\bootstrap-repo.ps1" \
-  -RepoPath "$WIN_TEST_REPO_DIR" \
-  -Slug "test-bootstrap-target" \
-  -PrimaryCli "claude" 2>/dev/null \
+node "$REPO_ROOT/tools/bootstrap-repo.js" "$TEST_REPO_DIR" \
+  --slug=test-bootstrap-target 2>/dev/null \
   && ok "second run exits 0" || fail "second run failed"
 
 # Count only the opening marker (with colon) to detect duplicate block injection
