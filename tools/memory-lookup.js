@@ -120,9 +120,13 @@ if (!agentName) {
 const topN = parseInt(flags.top || '5');
 const showAll = !!flags.all;
 const jsonOut = !!flags.json;
+// Per-agent memory nodes live at <root>/nexus/agent-brain/<agent>/nodes — the same
+// place brain-remember.js writes them. This used to default to <root>/<agent>,
+// which has never existed, so every default-path lookup found nothing. It went
+// unnoticed because every test passes --memory-root explicitly.
 const memoryRoot = flags['memory-root']
   ? resolve(flags['memory-root'])
-  : join(agentMemoryRoot(), agentName);
+  : join(agentMemoryRoot(), 'nexus', 'agent-brain', agentName, 'nodes');
 
 // In --json mode "nothing to report" is an empty result, not an error. Callers
 // parse stdout (Mission Control's /memory/search does), so prose here or a
