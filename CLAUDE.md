@@ -15,6 +15,25 @@ Onboard a repo (CLAUDE.md block + graph brain + registry): `node tools/bootstrap
 Onboard every git repo under a dir (also creates the global brains): `node tools/bootstrap-repo.js --all ~/dev`
 Cross-platform (Node.js, builtins only); idempotent. The per-repo `nexus/` brain is gitignored.
 
+## Session Naming
+
+Sessions are named automatically at exit by `hooks/session-auto-rename-hook.js` (wired as the
+third `SessionEnd` hook). A hook cannot invoke `/rename-session` — hooks are shell commands with
+no model turn — so it reproduces the command's steps: digest the transcript → headless
+`claude -p` (haiku, `--safe-mode --no-session-persistence`) for `{"summary","status"}` →
+`tools/session-namer.js --auto-rename`. Two-phase: the hook returns in ~80ms and a detached
+worker does the ~12s model call.
+
+A manual `/rename-session` always wins — the hook only overwrites names it wrote itself, tracked
+by markers in `~/.claude/cache/session-autorename/`. Results land in
+`~/agent-memory/nexus/session-autorename.log`; the worker verifies the registry actually changed
+rather than trusting exit code 0.
+
+**Never compare `pathToFileURL(process.argv[1])` to `import.meta.url` without realpath'ing
+argv[1]** — `import.meta.url` is always symlink-resolved. `~/dev/AgentSystem` is a symlink to the
+real checkout, so that check silently disabled `session-namer.js` for every production caller
+(exit 0, zero work). Guarded by `tools/session-namer-symlink.test.js`.
+
 ## Routines Engine
 
 Agent routines are defined in `config/routines.yml` and enforced hard by default. To add a new routine: add a YAML entry with `id`, `description`, `trigger`, `mechanism` (`agent-rule`|`hook`|`cron`), `enforce: hard`, `enabled: true`, and `action`. Then run `node tools/routines.js compile` to regenerate `.agents/rules/routines.generated.md`. To bypass a routine without editing the registry: `node tools/routines.js bypass <id>`. See `docs/memory-and-routing-redesign.md` → "Routines engine" section.
