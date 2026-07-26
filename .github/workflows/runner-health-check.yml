@@ -25,6 +25,16 @@ permissions:
 jobs:
   check-runner:
     runs-on: ubuntu-latest
+    env:
+      # This job does not check out the repo, so `gh issue ...` has no git remote to
+      # infer the repo from and every call errors. Without this the auto-close step
+      # failed on every run — the health check reported itself red daily for a reason
+      # unrelated to runner health, which trains everyone to ignore it.
+      GH_REPO: ${{ github.repository }}
+      # Jobs target `runs-on: [self-hosted, Linux]`. A runner that is online but does
+      # not carry every one of these labels can never pick those jobs up, so it is
+      # not "healthy" for our purposes.
+      REQUIRED_LABELS: 'self-hosted,Linux'
     steps:
       # Primary method: GET /actions/runners, which needs a PAT with Administration:read (the
       # workflow's own GITHUB_TOKEN can't be granted this permission at all). If the optional
@@ -43,38 +53,65 @@ jobs:
         run: |
           set +e
           method=""
-          down=""
+          # up | down | unknown. Indirect detection can only ever prove "down"; it must
+          # not be read as proof of health (see below).
+          state=""
+          detail=""
 
           if [ -n "$RUNNER_ADMIN_TOKEN" ]; then
             runners_json=$(GH_TOKEN="$RUNNER_ADMIN_TOKEN" gh api "repos/${{ github.repository }}/actions/runners" 2>/tmp/runners_err)
             if [ $? -eq 0 ]; then
-              online_self_hosted=$(echo "$runners_json" | jq '[.runners[] | select(.status == "online")] | length')
               method="direct"
-              [ "$online_self_hosted" -lt 1 ] && down=true || down=false
+              # A runner counts only if it is online AND carries every required label.
+              # The previous version counted any online runner, so a Windows-labelled
+              # runner read as healthy while every [self-hosted, Linux] job queued forever.
+              usable=$(echo "$runners_json" | jq --arg req "$REQUIRED_LABELS" '
+                ($req | split(",")) as $need
+                | [ .runners[]
+                    | select(.status == "online")
+                    | ([.labels[].name]) as $have
+                    | select( [ $need[] | IN($have[]) ] | all )
+                  ] | length')
+              detail=$(echo "$runners_json" | jq -r '[.runners[] | "\(.name)[\(.status),\([.labels[].name]|join("/"))]"] | join(" ")')
+              [ "${usable:-0}" -lt 1 ] && state=down || state=up
             else
               echo "RUNNER_ADMIN_TOKEN present but /actions/runners call failed, falling back to indirect detection:" >&2
               cat /tmp/runners_err >&2
             fi
           fi
 
-          if [ -z "$down" ]; then
-            # Indirect detection: any run of a self-hosted-targeting workflow still `queued`
-            # for more than 10 minutes strongly implies no runner picked it up.
+          if [ -z "$state" ]; then
+            # Indirect detection: a job still `queued` after 10 minutes means no runner
+            # picked it up. The absence of stuck jobs proves nothing — it usually just
+            # means nobody triggered those workflows today. Reporting that as healthy is
+            # what let a permanently offline runner go unnoticed, so "no evidence" is
+            # now `unknown`, which neither opens nor closes the tracking issue.
             method="indirect"
             stuck=0
-            for wf in agent-dispatch.yml sam-audit.yml; do
+            for wf in agent-dispatch.yml sam-audit.yml scheduled-tasks.yml; do
               runs_json=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?status=queued&per_page=10" 2>/dev/null)
               [ -z "$runs_json" ] && continue
               count=$(echo "$runs_json" | jq --arg cutoff "$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)" \
                 '[.workflow_runs[]? | select(.created_at < $cutoff)] | length' 2>/dev/null || echo 0)
               stuck=$((stuck + count))
             done
-            [ "$stuck" -gt 0 ] && down=true || down=false
+            if [ "$stuck" -gt 0 ]; then
+              state=down
+              detail="$stuck job(s) queued >10min with no runner"
+            else
+              state=unknown
+              detail="no RUNNER_ADMIN_TOKEN secret and no stuck jobs — health cannot be confirmed"
+            fi
           fi
 
-          echo "method=$method" >> "$GITHUB_OUTPUT"
-          echo "down=$down" >> "$GITHUB_OUTPUT"
-          echo "Runner health check: method=$method down=$down"
+          echo "method=$method"   >> "$GITHUB_OUTPUT"
+          echo "state=$state"     >> "$GITHUB_OUTPUT"
+          echo "down=$([ "$state" = down ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "detail=$detail"   >> "$GITHUB_OUTPUT"
+          echo "Runner health check: method=$method state=$state — $detail"
+          if [ "$state" = unknown ]; then
+            echo "::warning::Runner health could not be confirmed ($detail). Set the RUNNER_ADMIN_TOKEN secret (fine-grained PAT, Administration: Read-only) for direct detection."
+          fi
 
       - name: Ensure tracking label exists
         if: steps.check.outputs.down == 'true'
@@ -102,7 +139,7 @@ jobs:
           gh issue create \
             --title "[Infra]: self-hosted runner offline — agent-dispatch/sam-audit blocked" \
             --label "runner:down" \
-            --body "No online self-hosted runner detected as of $(date -u +%Y-%m-%dT%H:%M:%SZ) (detection method: \`${{ steps.check.outputs.method }}\`). \`/agent\`, \`/merge\`, \`/close\` dispatch and the Sam CI audit check will silently no-op until it's back online. This issue auto-closes on the next daily check once a runner is online again."
+            --body "No usable self-hosted runner detected as of $(date -u +%Y-%m-%dT%H:%M:%SZ) (detection method: \`${{ steps.check.outputs.method }}\`, required labels: \`${{ env.REQUIRED_LABELS }}\`). Observed: \`${{ steps.check.outputs.detail }}\`. \`/agent\`, \`/merge\`, \`/close\` dispatch, the Sam CI audit gate, and the nightly memory/maintenance tasks will silently no-op until a runner carrying all required labels is online. This issue auto-closes on the next daily check once that is true."
 
       - name: Comment ping on existing tracking issue
         if: steps.check.outputs.down == 'true' && steps.find.outputs.issue_number != ''
@@ -110,10 +147,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue comment "${{ steps.find.outputs.issue_number }}" \
-            --body "Still offline as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            --body "Still down as of $(date -u +%Y-%m-%dT%H:%M:%SZ) — ${{ steps.check.outputs.detail }}."
 
+      # Only a direct, label-aware check can prove the runner is usable. `unknown`
+      # deliberately does not close the issue.
       - name: Auto-close tracking issue (runner back online)
-        if: steps.check.outputs.down == 'false'
+        if: steps.check.outputs.state == 'up'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
