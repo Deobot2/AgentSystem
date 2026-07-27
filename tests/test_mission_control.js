@@ -6,8 +6,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, chmodSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { createServer as netCreateServer } from 'node:net';
 import path from 'node:path';
 
 const HOME = homedir();
@@ -413,6 +415,74 @@ test('GET /memory/search query structure', async (t) => {
   assert.equal(request.agent, 'friday');
   assert.equal(request.query, 'security audit');
 });
+
+// ── Test: /sessions does not re-pay the claude CLI cold start on every poll ──
+// Regression: getActiveSessions() shelled out to `claude agents --json` on every
+// request with no cache and no timeout. The real CLI cold-starts in ~13s and the
+// panel polls every 15s, so the panel was never fresher than 13s and kept a CLI
+// process resident. A fake slow `claude` reproduces that shape in 3s.
+
+test('/sessions serves a cached roster instead of shelling out per request', async (t) => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'mc-sessions-'));
+  const fakeClaude = path.join(tmp, 'claude');
+  writeFileSync(fakeClaude, '#!/bin/sh\nsleep 3\necho \'[{"id":"aaaa1111","cwd":"/tmp","kind":"background"}]\'\n');
+  chmodSync(fakeClaude, 0o755);
+
+  const port = await freePort();
+  const server = spawn(process.execPath, ['tools/mission-control/webhook-server.js'], {
+    cwd: path.resolve(import.meta.dirname, '..'),
+    env: { ...process.env, CLAUDE_BIN: fakeClaude, PORT: String(port), HOST: '127.0.0.1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => { server.kill('SIGKILL'); rmSync(tmp, { recursive: true, force: true }); });
+
+  await waitForLine(server.stdout, 'Claude Remote Control Server');
+  // Let the boot prewarm finish so the first real request is already warm.
+  await sleep(4500);
+
+  const key = readFileSync(`${HOME}/.claude/remote-webhook.key`, 'utf8').trim();
+  const headers = { Authorization: `Bearer ${key}` };
+  const url = `http://127.0.0.1:${port}/sessions`;
+
+  const first = await fetch(url, { headers });
+  assert.equal(first.status, 200);
+  const body = await first.json();
+  assert.ok(body.sessions.some(s => s.id === 'aaaa1111'), 'roster from the fake CLI is served');
+
+  // Three back-to-back polls. Uncached this would cost 3 x 3s.
+  const started = Date.now();
+  for (let i = 0; i < 3; i++) {
+    const r = await fetch(url, { headers });
+    assert.equal(r.status, 200);
+    await r.json();
+  }
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 2000, `3 polls took ${elapsed}ms — cache is not being served`);
+});
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = netCreateServer();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const { port } = s.address();
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+function waitForLine(stream, needle, timeoutMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for "${needle}"; saw: ${buf}`)), timeoutMs);
+    stream.on('data', d => {
+      buf += d;
+      if (buf.includes(needle)) { clearTimeout(timer); resolve(buf); }
+    });
+  });
+}
 
 // Cleanup test files
 test('cleanup', async (t) => {
