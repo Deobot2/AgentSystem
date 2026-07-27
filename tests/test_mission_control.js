@@ -6,8 +6,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, chmodSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, chmodSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer as netCreateServer } from 'node:net';
 import path from 'node:path';
@@ -428,13 +429,25 @@ test('/sessions serves a cached roster instead of shelling out per request', asy
   writeFileSync(fakeClaude, '#!/bin/sh\nsleep 3\necho \'[{"id":"aaaa1111","cwd":"/tmp","kind":"background"}]\'\n');
   chmodSync(fakeClaude, 0o755);
 
+  // The server refuses to boot without a bearer key. CI runners have none.
+  const keyFile = `${HOME}/.claude/remote-webhook.key`;
+  const keyWasOurs = !existsSync(keyFile);
+  if (keyWasOurs) {
+    mkdirSync(path.dirname(keyFile), { recursive: true });
+    writeFileSync(keyFile, randomBytes(32).toString('hex'), { mode: 0o600 });
+  }
+
   const port = await freePort();
   const server = spawn(process.execPath, ['tools/mission-control/webhook-server.js'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, CLAUDE_BIN: fakeClaude, PORT: String(port), HOST: '127.0.0.1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  t.after(() => { server.kill('SIGKILL'); rmSync(tmp, { recursive: true, force: true }); });
+  t.after(() => {
+    server.kill('SIGKILL');
+    rmSync(tmp, { recursive: true, force: true });
+    if (keyWasOurs) rmSync(keyFile, { force: true });
+  });
 
   await waitForLine(server.stdout, 'Claude Remote Control Server');
   // Let the boot prewarm finish so the first real request is already warm.
