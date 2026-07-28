@@ -376,7 +376,7 @@ record to `alerts.jsonl`.
 
 "enforce: hard" agent-rule routines are injected text, not mechanical gates (#119) — nothing
 measured whether sessions actually followed them. `hooks/routine-compliance-hook.js` (Stop hook,
-registered via `sync_hooks_from_repo.ps1`) replays the session's Bash/PowerShell commands from the
+registered via `tools/deploy-hooks.js`) replays the session's Bash/PowerShell commands from the
 transcript and checks the mechanically-checkable routines:
 
 - **fix-pr-until-green** — `gh pr create` must be followed by a `pr-guard.js` run
