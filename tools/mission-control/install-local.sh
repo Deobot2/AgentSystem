@@ -13,6 +13,11 @@
 #                     Default is a system service under /etc/systemd/system.
 #   --lan             Bind 0.0.0.0 (reachable on the LAN). Implies a firewall port open.
 #   --bind <addr>     Bind a specific address (e.g. a Tailscale IP). Overrides --lan.
+#   --tailscale       Bind this host's Tailscale IPv4 — reachable from any device on
+#                     the tailnet, unreachable from the LAN or the internet. This is
+#                     the recommended way to get phone access: WireGuard already
+#                     provides transport encryption and device identity, so no TLS
+#                     cert and no firewall hole are needed.
 #   --port <n>        Listen port (default 8765).
 #   --public-url <u>  Externally-reachable base URL to advertise (behind a proxy/Tailscale),
 #                     e.g. https://mc.example.com. Sets PUBLIC_URL in the unit.
@@ -44,6 +49,7 @@ FIREWALL="no"        # open a firewall port only when binding non-loopback
 WITH_RUNNER="no"
 RUNNER_TOKEN=""
 WITH_AUTO_UPDATE="no"
+TAILSCALE_BIND="no"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -51,13 +57,22 @@ while [ $# -gt 0 ]; do
     --user)         MODE="user"; shift ;;
     --lan)          HOST="0.0.0.0"; FIREWALL="yes"; shift ;;
     --bind)         HOST="$2"; FIREWALL="yes"; shift 2 ;;
+    --tailscale)
+      command -v tailscale >/dev/null 2>&1 || { echo "--tailscale: tailscale not installed" >&2; exit 2; }
+      HOST="$(tailscale ip -4 2>/dev/null | head -n1)"
+      [ -n "$HOST" ] || { echo "--tailscale: no Tailscale IPv4 (is 'tailscale up' done?)" >&2; exit 2; }
+      # Deliberately no firewall hole: the port is bound to the tailscale0 address
+      # only, so it is not reachable from the LAN and UFW has nothing to open.
+      FIREWALL="no"; TAILSCALE_BIND="yes"; shift ;;
     --port)         PORT="$2"; shift 2 ;;
     --public-url)   PUBLIC_URL="$2"; shift 2 ;;
     --no-service)   INSTALL_SERVICE="no"; shift ;;
     --with-runner)  WITH_RUNNER="yes"; shift ;;
     --runner-token) RUNNER_TOKEN="$2"; shift 2 ;;
     --with-auto-update) WITH_AUTO_UPDATE="yes"; shift ;;
-    -h|--help)      sed -n '2,27p' "$0"; exit 0 ;;
+    # Print the header comment block, whatever its length — a hardcoded line range
+    # silently truncates the help every time an option is added.
+    -h|--help)      awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -191,6 +206,14 @@ if [ "$HOST" = "127.0.0.1" ] || [ "$HOST" = "localhost" ]; then
   echo "  Bound to loopback. Reach it from your workstation with an SSH tunnel:"
   echo "    ssh -L $PORT:127.0.0.1:$PORT <user>@<server>"
   echo "  then open http://localhost:$PORT/panel?key=\$(cat $KEY_FILE)"
+elif [ "$TAILSCALE_BIND" = "yes" ]; then
+  echo "  Bound to the Tailscale address $HOST:$PORT."
+  echo "  Reachable from any device on the tailnet, and from nothing else — no"
+  echo "  firewall hole was opened and no TLS cert is needed (WireGuard provides"
+  echo "  transport encryption and device identity)."
+  echo "  On your phone, open:"
+  echo "    http://$HOST:$PORT/panel?key=\$(cat $KEY_FILE)"
+  echo "  and use 'Add to Home Screen' to install it as a PWA."
 else
   echo "  Bound to $HOST:$PORT — put TLS + a trusted network in front (see"
   echo "  docs/mission-control-linux-deploy.md). Access key: $KEY_FILE"
