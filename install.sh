@@ -53,6 +53,9 @@ done
 
 if [ "$FAIL_COUNT" -gt 0 ]; then
   echo -e "\n${RED}FATAL: $FAIL_COUNT prerequisite(s) missing. Fix above, then re-run.${NC}"
+  echo "On a fresh Linux server, bootstrap them all (node, gh, claude, agy) with:"
+  echo "  bash tools/mission-control/install-local.sh"
+  echo "then re-run ./install.sh."
   exit 1
 fi
 

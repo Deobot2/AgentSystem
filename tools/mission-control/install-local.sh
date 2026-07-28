@@ -1,9 +1,10 @@
 #!/bin/bash
 # install-local.sh — Mission Control installer for a headless Linux server (Ubuntu/Debian).
 #
-# Installs the webhook server as a systemd service, generates a bearer key, and
-# provisions the repo allowlist. Safe by default: binds loopback-only unless you
-# explicitly opt into LAN/public exposure.
+# Bootstraps a bare server: OS packages, Node 22, gh, the Claude Code CLI and the
+# Antigravity (agy) CLI, then installs the webhook server as a systemd service,
+# generates a bearer key, and provisions the repo allowlist. Safe by default:
+# binds loopback-only unless you explicitly opt into LAN/public exposure.
 #
 # Usage:
 #   bash tools/mission-control/install-local.sh [options]
@@ -11,6 +12,8 @@
 # Options:
 #   --user            Install as a systemd --user service (no sudo; needs linger).
 #                     Default is a system service under /etc/systemd/system.
+#   --no-clis         Skip installing the claude / agy agent CLIs (offline box, or
+#                     you manage them yourself). They are installed when missing.
 #   --lan             Bind 0.0.0.0 (reachable on the LAN). Implies a firewall port open.
 #   --bind <addr>     Bind a specific address (e.g. a Tailscale IP). Overrides --lan.
 #   --port <n>        Listen port (default 8765).
@@ -44,11 +47,13 @@ FIREWALL="no"        # open a firewall port only when binding non-loopback
 WITH_RUNNER="no"
 RUNNER_TOKEN=""
 WITH_AUTO_UPDATE="no"
+INSTALL_CLIS="yes"   # install the claude / agy CLIs when they are missing
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)         MODE="user"; shift ;;
+    --no-clis)      INSTALL_CLIS="no"; shift ;;
     --lan)          HOST="0.0.0.0"; FIREWALL="yes"; shift ;;
     --bind)         HOST="$2"; FIREWALL="yes"; shift 2 ;;
     --port)         PORT="$2"; shift 2 ;;
@@ -57,7 +62,7 @@ while [ $# -gt 0 ]; do
     --with-runner)  WITH_RUNNER="yes"; shift ;;
     --runner-token) RUNNER_TOKEN="$2"; shift 2 ;;
     --with-auto-update) WITH_AUTO_UPDATE="yes"; shift ;;
-    -h|--help)      sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '2,31p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -71,7 +76,13 @@ echo "  mode: $MODE service | bind: $HOST:$PORT"
 echo "================================================================="
 
 # ── 1. Dependencies ────────────────────────────────────────────────────────────
-echo "[1/6] Checking dependencies..."
+# Fresh-server bootstrap: OS packages, Node, gh, then the two agent CLIs the
+# webhook server shells out to (claude, agy). Every step is skip-if-present, so
+# re-running the installer on a provisioned box is a no-op here.
+echo "[1/6] Dependencies..."
+# Both CLIs install into ~/.local/bin; make it visible to the rest of this script.
+export PATH="$HOME/.local/bin:$PATH"
+
 apt_install() {
   if command -v apt-get &>/dev/null; then
     sudo apt-get update -qq && sudo apt-get install -y "$@"
@@ -79,8 +90,19 @@ apt_install() {
     echo "  !! apt-get not found — install '$*' manually" >&2
   fi
 }
-command -v git  &>/dev/null || apt_install git
-command -v tmux &>/dev/null || apt_install tmux
+
+# Package name == binary name for all of these. One apt transaction, not five.
+MISSING=()
+for bin in curl git tmux jq openssl; do
+  command -v "$bin" &>/dev/null || MISSING+=("$bin")
+done
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "  Installing: ${MISSING[*]}"
+  apt_install ca-certificates "${MISSING[@]}"
+else
+  echo "  base packages: ok (curl git tmux jq openssl)"
+fi
+
 if ! command -v node &>/dev/null; then
   echo "  Installing Node.js 22 LTS..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -89,15 +111,45 @@ fi
 NODE_BIN="$(command -v node)"
 echo "  node: $NODE_BIN ($(node --version))"
 
-# The server shells out to the claude CLI — warn loudly if it is missing.
-if command -v claude &>/dev/null; then
-  echo "  claude CLI: $(command -v claude)"
-elif [ -x "$HOME/.local/bin/claude" ]; then
-  echo "  claude CLI: $HOME/.local/bin/claude"
+# gh: used by POST /run's PR helpers and by every CI workflow on this host.
+if command -v gh &>/dev/null; then
+  echo "  gh: $(command -v gh)"
+elif command -v apt-get &>/dev/null; then
+  echo "  Installing GitHub CLI from cli.github.com..."
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | sudo tee /usr/share/keyrings/githubcli-archive-keyring.gpg >/dev/null
+  sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+  sudo apt-get update -qq && sudo apt-get install -y gh
 else
-  echo "  !! claude CLI not found on PATH or ~/.local/bin — POST /run will fail"
-  echo "     until it is installed. Continuing so the service is ready for it."
+  echo "  !! gh not found and apt-get unavailable — install it manually"
 fi
+
+# The server shells out to the claude CLI (POST /run) and agy (Antigravity harness).
+install_cli() {
+  local bin="$1" url="$2" label="$3"
+  if command -v "$bin" &>/dev/null; then
+    echo "  $label: $(command -v "$bin")"
+    return 0
+  fi
+  if [ "$INSTALL_CLIS" != "yes" ]; then
+    echo "  !! $label not found (--no-clis) — dispatch to it will fail until installed"
+    return 0
+  fi
+  echo "  Installing $label from ${url%/*}..."
+  # Vendor installers, run as this user, unpacking into ~/.local/bin. Not piped
+  # through sudo on purpose: both refuse to install into root's home.
+  if curl -fsSL "$url" | bash; then
+    command -v "$bin" &>/dev/null \
+      && echo "  $label: $(command -v "$bin")" \
+      || echo "  !! $label installer finished but '$bin' is not on PATH"
+  else
+    echo "  !! $label install failed — dispatch to it will fail until installed"
+  fi
+}
+install_cli claude https://claude.ai/install.sh "claude CLI"
+install_cli agy https://antigravity.google/cli/install.sh "agy CLI"
 
 # ── 2. Directories + node deps ───────────────────────────────────────────────
 echo "[2/6] Preparing directories..."
@@ -139,10 +191,21 @@ else
   echo "[5/6] Firewall: no change (loopback bind or UFW absent)."
 fi
 
+# The installers cannot log anybody in — that stays a manual step either way.
+print_auth_todo() {
+  echo "  Still to do by hand — each CLI needs an interactive login once:"
+  echo "    claude            # sign in (or: claude setup-token for a headless token)"
+  echo "    agy               # sign in to Antigravity"
+  echo "    gh auth login     # needed for PR actions and the self-hosted runner"
+  echo "  Until then dispatch requests reach the server and fail on auth."
+}
+
 # ── 6. systemd service ─────────────────────────────────────────────────────────
 if [ "$INSTALL_SERVICE" != "yes" ]; then
   echo "[6/6] --no-service: skipping systemd install."
   echo "  Run manually: HOST=$HOST PORT=$PORT node tools/mission-control/webhook-server.js"
+  echo "-----------------------------------------------------------------"
+  print_auth_todo
   exit 0
 fi
 
@@ -195,6 +258,8 @@ else
   echo "  Bound to $HOST:$PORT — put TLS + a trusted network in front (see"
   echo "  docs/mission-control-linux-deploy.md). Access key: $KEY_FILE"
 fi
+echo "-----------------------------------------------------------------"
+print_auth_todo
 echo "================================================================="
 
 # ── Optional: daily self-update timer ──────────────────────────────────────────

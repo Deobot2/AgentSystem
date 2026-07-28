@@ -20,21 +20,62 @@ server — use this document.
 - A **repo allowlist** at `~/agent-memory/nexus/known-repos.json` (seeded with the
   current repo; `POST /run` refuses any repo not listed here).
 
-Requirements: Node ≥ 20 (installer pulls Node 22), `tmux` (for persistent `agy`
-sessions), and the `claude` CLI on `PATH` or at `~/.local/bin/claude` (the server
-shells out to it — install it separately; the agent harness itself).
+On a fresh server the installer also bootstraps everything the server and the CI
+workflows need — each step skipped when already present, so re-running is a no-op:
+
+| Dependency | Source |
+|------------|--------|
+| `curl`, `git`, `tmux`, `jq`, `openssl`, `ca-certificates` | apt (one transaction) |
+| Node.js 22 LTS | `deb.nodesource.com/setup_22.x` |
+| `gh` (GitHub CLI) | official `cli.github.com` apt repo |
+| `claude` (Claude Code) | `https://claude.ai/install.sh` → `~/.local/bin/claude` |
+| `agy` (Antigravity CLI) | `https://antigravity.google/cli/install.sh` → `~/.local/bin/agy` |
+
+`tmux` backs persistent `agy` sessions; the webhook server shells out to `claude`,
+`agy`, and `gh`, resolving `~/.local/bin` first. Pass `--no-clis` to skip the two
+agent CLIs (offline box, or you manage them yourself).
+
+**The installer cannot log you in.** After it finishes, run each of these once:
+
+```bash
+claude              # sign in (or: claude setup-token for a headless token)
+agy                 # sign in to Antigravity
+gh auth login       # PR actions + self-hosted runner registration
+```
+
+Until then dispatch requests reach the server and fail on auth.
 
 ---
 
 ## 2. Install
 
+On a bare Ubuntu/Debian box, from a normal (non-root) user with sudo:
+
 ```bash
+sudo apt-get update && sudo apt-get install -y git   # only thing needed to clone
 git clone <repo> ~/AgentSystem && cd ~/AgentSystem
-# base agent system:
-./install.sh
-# then the mission-control server (or pass --with-mission-control to install.sh):
+
+# 1. Mission Control first — this is the dependency bootstrap (OS packages, Node,
+#    gh, claude, agy) plus the systemd service.
 bash tools/mission-control/install-local.sh
+
+# 2. then the base agent system (needs node + gh + claude, which step 1 installed).
+./install.sh
 ```
+
+Order matters on a bare box: `./install.sh` aborts with `FATAL: prerequisite(s)
+missing` if `node`/`gh` aren't there yet, so run the Mission Control bootstrap
+first. On an already-provisioned host either order works, and
+`./install.sh --with-mission-control` does both in one shot.
+
+Everything in one line, including CI runner and self-update:
+
+```bash
+bash tools/mission-control/install-local.sh --with-runner --with-auto-update
+```
+
+Do not run the installer with `sudo` — both CLI installers refuse to install into
+root's home, and the service is meant to run as your deploy user.
 
 By default this installs a **system** service bound to **loopback (127.0.0.1)** —
 the safe default. Nothing is exposed to the network until you opt in.
@@ -68,6 +109,7 @@ non-issue — but both CLIs must be installed on this host.
 | Flag | Effect |
 |------|--------|
 | `--user` | Install as a `systemd --user` service (no sudo). Enables linger so it survives logout/reboot. |
+| `--no-clis` | Skip installing the `claude` / `agy` CLIs. OS packages, Node, and `gh` still install. |
 | `--lan` | Bind `0.0.0.0` and open the port in UFW. LAN-reachable. |
 | `--bind <addr>` | Bind a specific address (e.g. a Tailscale IP `100.x.y.z`). Preferred over `--lan`. |
 | `--port <n>` | Listen port (default 8765). |
