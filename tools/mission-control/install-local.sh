@@ -134,10 +134,16 @@ fi
 echo "[4/6] Repo allowlist..."
 REPOS_FILE="$HOME/agent-memory/nexus/known-repos.json"
 if [ ! -f "$REPOS_FILE" ]; then
-  SLUG="$(basename "$REPO_ROOT")"
+  # Schema must match repo-validator.js, which looks up knownRepos.repos[].slug.
+  # A bare { "<slug>": { "path": ... } } map parses fine but matches nothing, so
+  # every POST /run would be rejected as "not in allowlist".
+  SLUG="$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]')"
   cat > "$REPOS_FILE" <<JSON
 {
-  "$SLUG": { "path": "$REPO_ROOT" }
+  "version": "1.0",
+  "repos": [
+    { "slug": "$SLUG", "path": "$REPO_ROOT", "primary_cli": "claude" }
+  ]
 }
 JSON
   echo "  seeded $REPOS_FILE with '$SLUG' -> $REPO_ROOT"
