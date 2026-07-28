@@ -184,6 +184,43 @@ check "base packages reported ok" "base packages: ok" "$SANDBOX/warm.out"
 check_absent "no CLI reinstall on a warm box" "install.sh" "$CALLS"
 check_absent "no apt install on a warm box" "apt-get install" "$CALLS"
 
+# ── install.sh as the single entrypoint ───────────────────────────────────────
+# It must forward unknown flags to the Mission Control installer, and bootstrap its
+# own prerequisites instead of dead-ending on a bare box.
+run_install_sh() { # run_install_sh <case-name> <stub-tools...> -- <install.sh args...>
+  local name="$1"; shift
+  export HOME="$SANDBOX/$name"
+  export CALLS="$SANDBOX/$name.calls"
+  local stub="$SANDBOX/$name.bin"
+  mkdir -p "$HOME"
+  : > "$CALLS"
+  build_stubs "$stub"
+  while [ "$1" != "--" ]; do
+    printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\nexit 0\n' "$1" > "$stub/$1"
+    chmod +x "$stub/$1"
+    shift
+  done
+  shift
+  env -i HOME="$HOME" CALLS="$CALLS" STUBDIR="$stub" PATH="$stub" \
+    bash "$REPO_ROOT/install.sh" "$@" > "$SANDBOX/$name.out" 2>&1 < /dev/null || {
+      echo "--- install.sh output ($name) ---"; cat "$SANDBOX/$name.out"
+      fail "install.sh exited non-zero ($name)"; return 1; }
+}
+
+echo "=== install.sh forwards unknown flags to the MC installer ==="
+run_install_sh fwd git gh claude -- \
+  --skip-labels --with-mission-control --no-service --port 9999
+check "port forwarded to the MC installer" "bind: 127.0.0.1:9999" "$SANDBOX/fwd.out"
+check "graph brain step ran" "Graph brain ready" "$SANDBOX/fwd.out"
+check "MCP server registered" "MCP server registered" "$SANDBOX/fwd.out"
+
+echo "=== install.sh bootstraps its own missing prerequisites ==="
+# No gh on PATH: the old script aborted with FATAL here.
+run_install_sh boot git claude -- --skip-labels
+check "bootstrap kicked in" "Bootstrapping missing prerequisites" "$SANDBOX/boot.out"
+check "gh installed during bootstrap" "cli.github.com/packages" "$SANDBOX/boot.calls"
+check_absent "no fatal abort" "FATAL" "$SANDBOX/boot.out"
+
 echo "-----------------------------------------------------------------"
 echo "PASS: $PASS  FAIL: $FAIL"
 [ "$FAIL" -eq 0 ]

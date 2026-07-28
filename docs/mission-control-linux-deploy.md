@@ -56,28 +56,18 @@ On a bare Ubuntu/Debian box, from a normal (non-root) user with sudo:
 sudo apt-get update && sudo apt-get install -y git   # only thing needed to clone
 git clone <repo> ~/AgentSystem && cd ~/AgentSystem
 
-# 1. Mission Control first — this is the dependency bootstrap (OS packages, Node,
-#    gh, claude, agy) plus the systemd service.
-bash tools/mission-control/install-local.sh
-
-# 2. then the base agent system (needs node + gh + claude, which step 1 installed).
-./install.sh
+# One command: bootstraps prerequisites, installs the agent system, then Mission
+# Control with phone access, the CI runner, and the daily self-update timer.
+./install.sh --with-mission-control --with-tailscale --with-runner --with-auto-update
 ```
 
-Order matters on a bare box: `./install.sh` aborts with `FATAL: prerequisite(s)
-missing` if `node`/`gh` aren't there yet, so run the Mission Control bootstrap
-first. On an already-provisioned host either order works, and
-`./install.sh --with-mission-control` does both in one shot.
+`install.sh` detects missing `node`/`gh` and runs the Mission Control dependency
+bootstrap itself, then continues; any flag it doesn't recognise is forwarded to
+`tools/mission-control/install-local.sh`. Running that installer directly works
+too — it just skips the agent-system half (brains, agent sync, hooks, MCP server).
 
-Everything in one line, including phone access over Tailscale, the CI runner, and
-self-update:
-
-```bash
-bash tools/mission-control/install-local.sh --with-tailscale --with-runner --with-auto-update
-```
-
-Do not run the installer with `sudo` — both CLI installers refuse to install into
-root's home, and the service is meant to run as your deploy user.
+Do not run either installer with `sudo` — both CLI installers refuse to install
+into root's home, and the service is meant to run as your deploy user.
 
 By default this installs a **system** service bound to **loopback (127.0.0.1)** —
 the safe default. Nothing is exposed to the network until you opt in.

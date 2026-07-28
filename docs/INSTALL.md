@@ -49,6 +49,9 @@ chmod +x install.sh
 
 # Skip label creation if not in a repo:
 ./install.sh --skip-labels
+
+# Fresh server, everything (prerequisites + Mission Control + phone access + CI runner):
+./install.sh --with-mission-control --with-tailscale --with-runner
 ```
 
 What both scripts do:
@@ -56,6 +59,15 @@ What both scripts do:
 - Initialize personal brain at `~/agent-memory/nexus/personal-brain/user-brain.md`
 - Sync all 11 agents to `~/.claude/agents/` and `~/.gemini/agents/`
 - Create GitHub labels (`agent:friday`, `priority:high`, etc.)
+
+`install.sh` additionally (Linux/macOS only — `install.ps1` does not do these yet):
+- Bootstraps missing prerequisites on a bare box instead of aborting: apt packages,
+  Node 22, `gh`, and the `claude` / `agy` CLIs, via
+  `tools/mission-control/install-local.sh`
+- Builds the repo graph brain (`nexus/agentsystem/`, gitignored)
+- Registers the `agentsystem` MCP server with Claude Code (Step 3's manual
+  `claude mcp add` is then unnecessary)
+- Forwards any unrecognised flag to the Mission Control installer
 
 ---
 
@@ -65,7 +77,7 @@ What both scripts do:
 
 **Install:**
 ```bash
-npm install -g @anthropic-ai/claude-code
+curl -fsSL https://claude.ai/install.sh | bash    # installs to ~/.local/bin/claude
 ```
 
 **Use agents:**
@@ -83,7 +95,8 @@ claude @threepio   # docs / comms
 claude @r2d2       # fallback / exploratory
 ```
 
-**Install MCP server** (exposes agent tools natively -- recommended):
+**Install MCP server** (exposes agent tools natively -- recommended). `./install.sh`
+already does this; run it by hand only on Windows or if that step warned:
 ```bash
 # Replace /path/to with your actual path
 claude mcp add agentsystem -- node /path/to/AgentSystem/tools/mcp-server.js
