@@ -37,13 +37,13 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 
 **Diagnostic steps:**
 1. Read last entries in `.agents/sync.log` — identify which step failed.
-2. Verify `sync_agents_from_repo.ps1` is present at repo root.
+2. Verify `tools/sync-agents.js` is present.
 3. Run `Test-Path "$env:USERPROFILE\.claude\agents\"` — confirm target directories exist.
 4. Check if any agent `.md` file has invalid frontmatter (missing `---` block or empty `name:`).
 
 **Recovery steps:**
 1. Fix the invalid agent file if that is the root cause.
-2. Re-run: `powershell -File .\sync_agents_from_repo.ps1`
+2. Re-run: `node tools/sync-agents.js`
 3. Verify output: check timestamps of `%USERPROFILE%\.claude\agents\*.md` match current time.
 4. If sync still fails, manually copy `.agents/agents/<agent>.md` to `%USERPROFILE%\.claude\agents\`.
 5. Log the incident in `.agents/memory/friday.md`.

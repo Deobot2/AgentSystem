@@ -219,7 +219,6 @@ User
 | `.agents/rules/shared-blocks.md` | Canonical text injected into `<!-- SHARED:... -->` markers at sync time |
 | `~/agent-memory/nexus/` | Shared graph-brain memory (personal, agent, repo brains) |
 | `tools/sync-agents.js` | Canonical sync — generates user-level Claude + Antigravity copies (all platforms) |
-| `sync_agents_from_repo.ps1` | Legacy thin shim; delegates to `tools/sync-agents.js` |
 | `CLAUDE.md` | Claude-specific usage, default agent, bypass pattern |
 | `HANDOFF.md` | Current-state log for in-flight and blocked work (repo root, written by `tools/generate-handoff.js`) |
 | `README.md` | Repo overview and quick start |
