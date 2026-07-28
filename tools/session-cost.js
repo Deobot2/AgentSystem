@@ -35,7 +35,7 @@ const lines = readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean);
 const rawSessions = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
 // #155: defense against double-logged rows. Root cause investigated: sona-writeback-hook.js
-// is intentionally registered on BOTH the Stop and SubagentStop events (see sync_hooks_from_repo.ps1),
+// is intentionally registered on BOTH the Stop and SubagentStop events (see HOOK_REGISTRY in tools/deploy-hooks.js),
 // which is by design (main-session AND subagent episodic capture) — but session-end.sh (the writer
 // of THIS log) is registered once, on Stop only. If a future hook wiring regression ever fires the
 // same Stop event twice for one turn (e.g. duplicate registration, or a retried hook after timeout),

@@ -38,14 +38,29 @@ Defaults to a system service bound to `127.0.0.1:8765`. Useful flags:
 | Flag | Effect |
 |------|--------|
 | `--user` | Install as a `systemd --user` unit (no sudo; needs linger enabled). |
+| `--tailscale` | Bind this host's Tailscale IPv4. **Recommended for phone access.** |
 | `--lan` | Bind `0.0.0.0` and open the port in UFW. Opt-in — see Security. |
-| `--bind <addr>` | Bind a specific address (e.g. a Tailscale IP). |
+| `--bind <addr>` | Bind a specific address. |
 | `--port <n>` | Override port 8765. |
 | `--no-service` | Set up key/config only; run the server by hand. |
 | `--with-runner` | Also register the GitHub Actions self-hosted runner. |
 | `--with-auto-update` | Daily timer that pulls `origin/main` and restarts. |
 
-Reaching it from a phone without exposing the port:
+### Reaching it from a phone
+
+Preferred — bind to the tailnet:
+
+```bash
+bash tools/mission-control/install-local.sh --tailscale
+```
+
+The port binds to the `tailscale0` address only, so it is reachable from every
+device on your tailnet and from nothing else. No firewall hole is opened and no
+TLS certificate is needed: WireGuard already provides transport encryption and
+device identity. The installer prints the phone URL; use "Add to Home Screen" to
+install the panel as a PWA.
+
+Alternative, if you would rather not bind off-loopback at all:
 
 ```bash
 ssh -L 8765:127.0.0.1:8765 <user>@<server>

@@ -10,6 +10,10 @@
 # "always-injected / expected-to-follow", not "impossible to bypass without the CLI bypass
 # command" — the bypass command just stops the text from being injected in the first place.
 #
+# ACTION TEXT IS A PER-SESSION TOKEN COST. Every enabled agent-rule action is injected into
+# every session, so `action:` is written terse on purpose: commands, paths, flags and issue
+# refs verbatim, prose stripped. Keep it that way when editing.
+#
 # To bypass a routine without editing this file:
 #   node tools/routines.js bypass <id> [--session]
 #   node tools/routines.js unbypass <id>
@@ -17,7 +21,7 @@
 # Mechanisms:
 #   agent-rule — compiled into .agents/rules/routines.generated.md (injected at SessionStart)
 #   hook       — enforced by hooks/routine-dispatch.js at runtime (no settings.json edit needed)
-#   cron       — registers a Windows Task Scheduler job
+#   cron       — documents a scheduled job; see the NOTE above the cron entries below
 #
 # To add a new routine: add an entry here, then run: node tools/routines.js compile
 
@@ -27,7 +31,7 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "Before starting any feature work, create or enter a git worktree. Use the superpowers:using-git-worktrees skill. Never do feature work directly on the main branch clone."
+  action: "Feature work: create or enter a git worktree first (superpowers:using-git-worktrees skill). Never feature-work directly on the main branch clone."
 
 - id: fix-pr-until-green
   description: Do not declare done until PR CI checks pass and all review threads are resolved
@@ -35,7 +39,7 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "After opening a PR, do not declare DONE until pr-guard passes: run `node tools/pr-guard.js <pr-number>` — all CI checks must be green and all review threads resolved."
+  action: "After opening a PR, not DONE until `node tools/pr-guard.js <pr-number>` passes: all CI checks green, all review threads resolved."
 
 - id: auto-resolve-pr-comments
   description: 2-3 minutes after PR creation, respond to any review comments
@@ -51,7 +55,7 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "For identity/memory queries (who am I, what do you know about me, my preferences), answer INLINE using: node ~/dev/AgentSystem/tools/graph/graph-query.js personal-brain <keywords> --brain-path=~/agent-memory/nexus/personal-brain --record-access. Do NOT spawn a heavyweight agent. This path returns ~110 tokens vs 47k for a subagent call."
+  action: "Identity/memory queries (who am I, what do you know about me, my preferences): answer INLINE via `node ~/dev/AgentSystem/tools/graph/graph-query.js personal-brain <keywords> --brain-path=~/agent-memory/nexus/personal-brain --record-access`. Never spawn an agent — ~110 tokens vs 47k."
 
 - id: memory-write-back
   description: Agents self-capture durable facts to memory the moment they judge them relevant
@@ -59,7 +63,7 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "The MOMENT you learn a durable fact worth keeping (a user preference, decision, correction, stable project/company context, or a reusable pattern), immediately persist it — do not wait for session end. Run: node ~/dev/AgentSystem/tools/brain-remember.js --fact=\"<concise fact>\" [--tier=repo --target=<slug> | --tier=agent --target=<name>]. Tier routing: personal (default) = about the user; repo:<slug> = a technical/business fact about ONE repo (slugs+descriptions in ~/agent-memory/nexus/known-repos.json — match by what the repo IS, e.g. genie=product UI vs genie-brain=Arbor Genie backend/business-logic); agent:<name> = a learned pattern about one agent. Only capture facts that are durable + specific + high-precision; skip one-off task details and speculation. Dedup is automatic. A Stop-hook safety net (memory-capture.js) also sweeps the transcript, but capture at the moment of insight so nothing is lost."
+  action: "Learned a durable fact (user preference, decision, correction, stable project/company context, reusable pattern)? Persist immediately, do not wait for session end: `node ~/dev/AgentSystem/tools/brain-remember.js --fact=\"<fact>\" [--tier=repo --target=<slug> | --tier=agent --target=<name>]`. Tiers: personal (default) = about the user; repo:<slug> = technical/business fact about ONE repo (slugs in ~/agent-memory/nexus/known-repos.json; match what the repo IS, e.g. genie=product UI vs genie-brain=Arbor Genie backend); agent:<name> = pattern about one agent. Durable + specific only; skip one-off details and speculation. Dedup automatic. Stop-hook memory-capture.js sweeps as backup."
 
 - id: teach-the-swarm
   description: "[META] A prompt-match routine can teach new swarm behavior. Disabled example."
@@ -76,7 +80,7 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "After merging a PR (gh pr merge), verify the linked issue is closed (gh issue close <N> --comment referencing the PR) and the source branch was deleted (--delete-branch on merge, or gh api to delete if it wasn't). Do not leave merged branches or linked-but-open issues behind."
+  action: "After `gh pr merge`: confirm the linked issue is closed (`gh issue close <N>` with a comment referencing the PR) and the source branch is deleted (`--delete-branch`, or `gh api` if missed). Leave no merged branches or linked-but-open issues."
 
 - id: verify-before-close
   description: Never close an issue without a landed commit/PR reference
@@ -84,11 +88,13 @@
   mechanism: agent-rule
   enforce: hard
   enabled: true
-  action: "Before closing any GitHub issue, verify the fix actually landed: use `node ~/dev/AgentSystem/tools/issue-close.js <n> --commit <sha>` which checks the commit is reachable from origin/main (git merge-base --is-ancestor) before closing with a reference comment. Never `gh issue close` directly for fix-type issues; closed-without-landed-commit caused a full re-audit round (#151)."
+  action: "Before closing any GitHub issue, verify the fix landed: `node ~/dev/AgentSystem/tools/issue-close.js <n> --commit <sha>` (checks the commit is reachable from origin/main via `git merge-base --is-ancestor`, then closes with a reference comment). Never bare `gh issue close` for fix-type issues — closed-without-landed-commit caused a full re-audit (#151)."
 
-# NOTE on cron-mechanism routines (2026-07-12 audit): `mechanism: cron` entries are NOT
-# auto-registered by routines.js — they document Windows Task Scheduler jobs created by
-# tools/setup-scheduled-tasks.ps1. Re-run that script after changing any cron entry here.
+# NOTE on cron-mechanism routines: `mechanism: cron` entries are NOT auto-registered by
+# routines.js and are NOT injected into sessions — they document the scheduled jobs defined in
+# .github/workflows/scheduled-tasks.yml, which run on the self-hosted Linux runner. Change a
+# cron entry here and you must change that workflow too. (Before the Linux migration these
+# were Windows Task Scheduler jobs created by tools/setup-scheduled-tasks.ps1.)
 
 - id: weekly-agent-review
   description: Saturday agent fleet review (goal scorecard, risk scan, agent performance)

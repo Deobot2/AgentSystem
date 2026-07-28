@@ -219,7 +219,6 @@ User
 | `.agents/rules/shared-blocks.md` | Canonical text injected into `<!-- SHARED:... -->` markers at sync time |
 | `~/agent-memory/nexus/` | Shared graph-brain memory (personal, agent, repo brains) |
 | `tools/sync-agents.js` | Canonical sync — generates user-level Claude + Antigravity copies (all platforms) |
-| `sync_agents_from_repo.ps1` | Legacy thin shim; delegates to `tools/sync-agents.js` |
 | `CLAUDE.md` | Claude-specific usage, default agent, bypass pattern |
 | `HANDOFF.md` | Current-state log for in-flight and blocked work (repo root, written by `tools/generate-handoff.js`) |
 | `README.md` | Repo overview and quick start |
@@ -235,5 +234,5 @@ User
 | Friday / Nat | claude-sonnet-5 | gemini-3-flash-preview |
 | Ultron / Pym / Leo / Astra / Wanda / Threepio / r2d2 | claude-haiku-4-5-20251001 | gemini-3.1-flash-lite-preview |
 
-Antigravity is a Gemini-family runtime, so it loads `gemini-*` model ids (the `gemini` column in `config/models.yml`).
-Source of truth: `config/models.yml`. If a mapping changes, update that file and the `MODELS` map in `tools/sync-agents.js`, then re-run the sync.
+Antigravity is a Gemini-family runtime, so it loads `gemini-*` model ids (the `gemini` row of the map below).
+Source of truth: the `MODELS` map in `tools/sync-agents.js`. If a mapping changes, edit that map and re-run `node tools/sync-agents.js`.

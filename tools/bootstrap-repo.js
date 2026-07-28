@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bootstrap-repo.js — Cross-platform repo onboarding for the AgentSystem (Linux/Mac/Windows).
-// JS port of bootstrap-repo.ps1. Idempotent — safe to re-run.
+// Idempotent — safe to re-run.
 //
 // Single repo:
 //   node tools/bootstrap-repo.js [repoPath] [--slug=name] [--install-deps] [--skip-graph]

@@ -51,17 +51,17 @@ claude mcp add agentsystem -- node C:\full\path\to\AgentSystem\tools\mcp-server.
 ```
 
 **New repo:**
-```powershell
-cd C:\path\to\your-repo
-powershell -File C:\path\to\AgentSystem\tools\bootstrap-repo.ps1
+```bash
+cd /path/to/your-repo
+node /path/to/AgentSystem/tools/bootstrap-repo.js
 ```
 
 **After editing agents:**
-```powershell
-.\sync_agents_from_repo.ps1
+```bash
+node tools/sync-agents.js
 ```
 
-> **Note:** `caveman:cavecrew-builder`, `caveman:cavecrew-investigator`, and `caveman:cavecrew-reviewer` are plugin-provided agents (installed via the Claude Code plugin system). They do **not** live in `.agents/agents/` and are **not** managed by `sync_agents_from_repo.ps1`. Do not try to edit them.
+> **Note:** `caveman:cavecrew-builder`, `caveman:cavecrew-investigator`, and `caveman:cavecrew-reviewer` are plugin-provided agents (installed via the Claude Code plugin system). They do **not** live in `.agents/agents/` and are **not** managed by `tools/sync-agents.js`. Do not try to edit them.
 
 See [docs/INSTALL.md](docs/INSTALL.md) for the full step-by-step guide (per CLI, per platform, verification checklist).
 
@@ -88,14 +88,14 @@ Or just tell Friday to `do work` — it reads open issues and picks the highest 
                        (model: field in each .md is the source of truth for model assignment)
 tools/
   mcp-server.js        MCP server (6 tools for Claude Code)
-  bootstrap-repo.ps1   per-repo setup
+  bootstrap-repo.js    per-repo setup
   agent-message.js     inter-agent inbox messaging
   graph/               Bayesian graph memory engine
 docs/
   INSTALL.md           full installation guide
   HANDOFF.md           current state and open work
-install.ps1            first-time machine setup
-sync_agents_from_repo.ps1   sync agents → all 3 CLIs
+install.sh             first-time machine setup (install.ps1 on Windows)
+tools/sync-agents.js   sync agents → all 3 CLIs
 ```
 
 ---
