@@ -235,5 +235,5 @@ User
 | Friday / Nat | claude-sonnet-5 | gemini-3-flash-preview |
 | Ultron / Pym / Leo / Astra / Wanda / Threepio / r2d2 | claude-haiku-4-5-20251001 | gemini-3.1-flash-lite-preview |
 
-Antigravity is a Gemini-family runtime, so it loads `gemini-*` model ids (the `gemini` column in `config/models.yml`).
-Source of truth: `config/models.yml`. If a mapping changes, update that file and the `MODELS` map in `tools/sync-agents.js`, then re-run the sync.
+Antigravity is a Gemini-family runtime, so it loads `gemini-*` model ids (the `gemini` row of the map below).
+Source of truth: the `MODELS` map in `tools/sync-agents.js`. If a mapping changes, edit that map and re-run `node tools/sync-agents.js`.

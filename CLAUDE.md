@@ -1,84 +1,65 @@
 # AgentSystem
 
-## Agent Management
-- Edit: `.agents/agents/<name>.md`
-- Sync to all CLIs: `node tools/sync-agents.js` (all platforms)
-- Verify: check `.agents/sync.log` for ERROR lines
+## Agents
+- Edit `.agents/agents/<name>.md`, then `node tools/sync-agents.js` (all platforms).
+- Verify: `.agents/sync.log`, grep ERROR.
+- Code-location searches ("where is X defined", "what calls Y"): use
+  `caveman:cavecrew-investigator`, not `Explore` — same result, ~60% less caller context (#164).
 
-## Hook Deployment
-Hooks in `hooks/` do nothing until they are both **copied** to `~/.claude/hooks/` and
-**registered** under the `hooks` key of `~/.claude/settings.json`. One command does both:
+## Hooks
+Hooks do nothing until **copied** to `~/.claude/hooks/` AND **registered** under `hooks` in
+`~/.claude/settings.json`. One command does both:
+- `node tools/deploy-hooks.js` — deploy + register, idempotent
+- `node tools/deploy-hooks.js --check` — exit 1 on drift or missing registration
 
-- Deploy + register: `node tools/deploy-hooks.js` (all platforms, idempotent)
-- Check for drift: `node tools/deploy-hooks.js --check` (exit 1 if out of sync)
+Run after any `hooks/` change. Manifest is `HOOK_REGISTRY` in `tools/deploy-hooks.js` — add new
+hooks there. Registration was once PowerShell-only, so on Linux the whole pipeline was
+installed-but-inert; `--check` in CI is what stops that recurring.
 
-Run it after any change to `hooks/`. Registration was previously PowerShell-only
-(`sync_hooks_from_repo.ps1`), so on Linux the whole pipeline was installed-but-inert —
-`--check` in CI is what stops that recurring. The manifest lives in `HOOK_REGISTRY`
-in `tools/deploy-hooks.js`; add new hooks there, not to the .ps1.
-- Code-location searches ("where is X defined", "what calls Y"): prefer
-  `caveman:cavecrew-investigator` over the generic `Explore` agent — same result, ~60% less
-  context consumed by the tool-result injected back into the caller (#164).
+Not registered on purpose: `tool-output-compress.js`. PostToolUse can only append context, never
+replace a tool result — it cost ~800 tok per large Bash output while claiming to save.
 
 ## Memory
-Root: `~/agent-memory/nexus/` — shared across Claude, Antigravity
+Root `~/agent-memory/nexus/` — shared by Claude and Antigravity.
+Per-agent nodes: `nexus/agent-brain/<agent>/nodes/`.
 
-Onboard a repo (CLAUDE.md block + graph brain + registry): `node tools/bootstrap-repo.js [repoPath]`
-Onboard every git repo under a dir (also creates the global brains): `node tools/bootstrap-repo.js --all ~/dev`
-Cross-platform (Node.js, builtins only); idempotent. The per-repo `nexus/` brain is gitignored.
+- Onboard one repo: `node tools/bootstrap-repo.js [repoPath]`
+- Onboard every git repo under a dir (+ global brains): `node tools/bootstrap-repo.js --all ~/dev`
 
-## Routines Engine
+Node builtins only, idempotent. Per-repo `nexus/` brain is gitignored.
 
-Agent routines are defined in `config/routines.yml` and enforced hard by default. To add a new routine: add a YAML entry with `id`, `description`, `trigger`, `mechanism` (`agent-rule`|`hook`|`cron`), `enforce: hard`, `enabled: true`, and `action`. Then run `node tools/routines.js compile` to regenerate `.agents/rules/routines.generated.md`. To bypass a routine without editing the registry: `node tools/routines.js bypass <id>`. See `docs/memory-and-routing-redesign.md` → "Routines engine" section.
+## Routines
+`config/routines.yml`, enforced hard by default. New routine: add entry with `id`, `description`,
+`trigger`, `mechanism` (`agent-rule`|`hook`|`cron`), `enforce: hard`, `enabled: true`, `action`;
+then `node tools/routines.js compile` to regenerate `.agents/rules/routines.generated.md`.
+Bypass without editing: `node tools/routines.js bypass <id>`.
+**`action:` text is injected every session — keep it terse.**
+See `docs/memory-and-routing-redesign.md` → "Routines engine".
 
 ## Path-Scoped Rules
 
-These rules only activate when touching matching files (Claude Code `paths:` feature):
+**DB / schema** (`*.sql`, `prisma/**`, `*.prisma`) — Pym domain. Migrate in dev first. Never
+`prisma migrate deploy` without approval.
 
-- **Database / schema files** (`*.sql`, `prisma/**`, `*.prisma`):
-  Pym domain. Run migrations in dev first. Never `prisma migrate deploy` without approval.
+**Agent defs** (`.agents/**`) — edit `.agents/agents/<name>.md`, then `node tools/sync-agents.js`.
 
-- **Agent definitions** (`.agents/**`):
-Edit `.agents/agents/<name>.md`, then run `node tools/sync-agents.js` to sync to all CLIs.
+**Tools** (`tools/**`) — no npm deps. Node builtins + `graph-lib.js` imports only.
 
-- **CI/CD workflows** (`.github/workflows/**`):
-  Test on feature branch before merging. Self-hosted runner required for agent-dispatch.yml.
-  **Self-hosted runner is the Linux Mission Control host.** `agent-dispatch.yml`, `sam-audit.yml`,
-  `friday-audit.yml`, and `scheduled-tasks.yml` pin `runs-on: [self-hosted, Linux]` and their steps
-  are **bash** (ported from Windows PowerShell). Install/re-register the runner on the mission-control
-  server with `bash tools/mission-control/install-runner.sh` (or `install-local.sh --with-runner`);
-  it installs as a boot-persistent systemd service via the runner's own `svc.sh` and needs `gh`,
-  `node`, and the `claude` CLI on the host (the audit/dispatch steps resolve them by absolute path,
-  `~/.local/bin` first).
-  **Single point of failure (see #115):** if that runner is offline, dispatched `/agent`, `/merge`,
-  `/close` comments and label triggers silently no-op — no PR comment, no failure signal, nothing
-  queues or retries. `.github/workflows/runner-health-check.yml` runs on a schedule and opens/updates
-  a tracking issue labeled `runner:down` if the self-hosted runner has no recent job; check that issue
-  (or `gh api repos/:owner/:repo/actions/runners`) if a dispatched command appears to hang.
+**Tests** (`tests/**`, `**/*.test.js`) — `node --test <file>` before committing. Full suite:
+`npm test`. All green on dev before PR to main.
 
-  **Sam pre-merge audit timing (#164):** `sam-audit.yml` no longer runs on every `synchronize`
-  push — it fires once per PR at merge-prep time: on `opened` (non-draft PRs only), on
-  `ready_for_review` (draft→ready transition), or when the `ready-to-merge` label is added to an
-  already-open PR. To (re-)trigger Sam's gate on an open PR — e.g. after addressing feedback —
-  mark the PR "ready for review" if it's a draft, or add the `ready-to-merge` label. A non-draft
-  PR opened directly still gets exactly one automatic audit on `opened`.
-  `friday-audit.yml` (engineering review, informational only) fires once, on `opened`. Both
-  workflows skip docs-only changes (`docs/**`, `**/*.md` via `paths-ignore`) and PRs labeled
-  `spec`. `pr-auto-review` (cavecrew reviewer, formerly in `scheduled-tasks.yml`) is retired —
-  `friday-audit.yml` is the single engineering reviewer.
-
-- **Memory tools** (`tools/**`):
-  No npm deps. Pure Node.js builtins + graph-lib.js imports only.
-
-- **Test files** (`tests/**`, `**/*.test.js`):
-  Run `node --test <file>` before committing. All tests must pass on dev before PR to main.
+**CI/CD** (`.github/workflows/**`) — test on a feature branch before merging. Sam's
+`sam-audit.yml` is a required check on `main` and needs the self-hosted Linux runner.
+Read `docs/ci-runbook.md` before editing workflows, or when a dispatched `/agent`,
+`/merge`, `/close` or an audit appears to hang (#115) — it covers runner install, the
+three things to check when one hangs, and audit trigger timing (#164).
 
 <!-- AGENT-SYSTEM-BOOTSTRAP: do not remove this block -->
 ## Agent System Context (auto-injected by bootstrap-repo.js)
 
 - Agent routing: see `~/.claude/CLAUDE.md`
 - Agent brain: `~/agent-memory/nexus/agent-brain/`
-- Repo brain: `nexus/agentsystem/` (run `node tools/graph/graph-init.js agentsystem .` to refresh)
+- Repo brain: `nexus/agentsystem/` (refresh: `node tools/graph/graph-init.js agentsystem .`)
 - Query graph: `node tools/graph/graph-query.js agentsystem <keywords>`
 - Update weights: `node tools/graph/graph-weight.js visit agentsystem <source> <target>`
 - Known repos: `~/agent-memory/nexus/known-repos.json`

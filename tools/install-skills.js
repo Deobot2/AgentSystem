@@ -47,8 +47,25 @@ function copySkill(name) {
   return { name, status: 'updated' };
 }
 
+// Every installed skill's description is loaded into EVERY session (~70 tok each), so
+// installing all of them is a real per-session cost for skills that fire once a month.
+// CORE = high value and frequently triggered. The rest stay in the repo and are installed
+// on demand: `node tools/install-skills.js standup stale-sweep`, or `--all`.
+const CORE = ['verify-claim', 'replicate-bug', 'pr-ready', 'postmortem', 'refute'];
+
 function main() {
-  const names = listSkillDirs(srcRoot);
+  const args = process.argv.slice(2);
+  const all = args.includes('--all');
+  const explicit = args.filter((a) => !a.startsWith('--'));
+
+  const available = listSkillDirs(srcRoot);
+  const names = explicit.length ? explicit : all ? available : CORE.filter((n) => available.includes(n));
+
+  const missing = names.filter((n) => !available.includes(n));
+  if (missing.length) {
+    console.error(`Unknown skill(s): ${missing.join(', ')}\nAvailable: ${available.join(', ')}`);
+    process.exit(1);
+  }
   if (names.length === 0) {
     console.log(`No skills found under ${srcRoot}`);
     process.exit(0);
