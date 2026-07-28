@@ -35,7 +35,7 @@ build_stubs() {
   local stub="$1"
   mkdir -p "$stub"
   local u tool
-  for u in bash sh sed mkdir cat chmod cp rm mktemp basename dirname whoami grep tee head; do
+  for u in bash sh sed awk tr mkdir cat chmod cp rm mktemp basename dirname whoami grep tee head; do
     ln -sf "$(command -v "$u")" "$stub/$u"
   done
   # Recorders: every call is appended to $CALLS, nothing touches the system.

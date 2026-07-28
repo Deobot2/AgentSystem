@@ -16,6 +16,12 @@
 #                     you manage them yourself). They are installed when missing.
 #   --lan             Bind 0.0.0.0 (reachable on the LAN). Implies a firewall port open.
 #   --bind <addr>     Bind a specific address (e.g. a Tailscale IP). Overrides --lan.
+#   --tailscale       Bind this host's already-joined Tailscale IPv4 — reachable from
+#                     any device on the tailnet, unreachable from the LAN or the
+#                     internet. WireGuard already provides transport encryption and
+#                     device identity, so no TLS cert is needed and the only firewall
+#                     rule added is on tailscale0. Use --with-tailscale if Tailscale
+#                     is not installed/joined yet.
 #   --port <n>        Listen port (default 8765).
 #   --public-url <u>  Externally-reachable base URL to advertise (behind a proxy/Tailscale),
 #                     e.g. https://mc.example.com. Sets PUBLIC_URL in the unit.
@@ -54,9 +60,9 @@ WITH_RUNNER="no"
 RUNNER_TOKEN=""
 WITH_AUTO_UPDATE="no"
 INSTALL_CLIS="yes"   # install the claude / agy CLIs when they are missing
-WITH_TAILSCALE="no"
+WITH_TAILSCALE="no"  # install Tailscale and join the tailnet, then bind that IP
 TS_AUTHKEY="${TS_AUTHKEY:-}"   # env is preferred over the flag: not visible in `ps`
-TS_IP=""             # filled in once the box is on the tailnet
+TAILSCALE_BIND="no"  # bound address is a tailnet address (either entry point)
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -65,6 +71,11 @@ while [ $# -gt 0 ]; do
     --no-clis)      INSTALL_CLIS="no"; shift ;;
     --lan)          HOST="0.0.0.0"; FIREWALL="yes"; HOST_EXPLICIT="yes"; shift ;;
     --bind)         HOST="$2"; FIREWALL="yes"; HOST_EXPLICIT="yes"; shift 2 ;;
+    --tailscale)
+      command -v tailscale >/dev/null 2>&1 || { echo "--tailscale: tailscale not installed" >&2; exit 2; }
+      HOST="$(tailscale ip -4 2>/dev/null | head -n1)"
+      [ -n "$HOST" ] || { echo "--tailscale: no Tailscale IPv4 (is 'tailscale up' done?)" >&2; exit 2; }
+      HOST_EXPLICIT="yes"; TAILSCALE_BIND="yes"; shift ;;
     --port)         PORT="$2"; shift 2 ;;
     --public-url)   PUBLIC_URL="$2"; shift 2 ;;
     --with-tailscale) WITH_TAILSCALE="yes"; shift ;;
@@ -73,7 +84,9 @@ while [ $# -gt 0 ]; do
     --with-runner)  WITH_RUNNER="yes"; shift ;;
     --runner-token) RUNNER_TOKEN="$2"; shift 2 ;;
     --with-auto-update) WITH_AUTO_UPDATE="yes"; shift ;;
-    -h|--help)      sed -n '2,36p' "$0"; exit 0 ;;
+    # Print the header comment block, whatever its length — a hardcoded line range
+    # silently truncates the help every time an option is added.
+    -h|--help)      awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -189,11 +202,11 @@ if [ "$WITH_TAILSCALE" = "yes" ]; then
     # Bind it unless the caller already chose an address — an explicit --bind wins.
     if [ "$HOST_EXPLICIT" = "no" ]; then
       HOST="$TS_IP"
-      FIREWALL="yes"
+      TAILSCALE_BIND="yes"
       [ -n "$PUBLIC_URL" ] || PUBLIC_URL="http://$TS_IP:$PORT"
       echo "  binding the tailnet IP: $HOST:$PORT"
     else
-      echo "  keeping the requested bind $HOST (--bind/--lan given)"
+      echo "  keeping the requested bind $HOST (--bind/--lan/--tailscale given)"
     fi
   else
     echo "  !! not on a tailnet yet — run 'sudo tailscale up', then re-run this installer"
@@ -220,10 +233,16 @@ fi
 echo "[4/6] Repo allowlist..."
 REPOS_FILE="$HOME/agent-memory/nexus/known-repos.json"
 if [ ! -f "$REPOS_FILE" ]; then
-  SLUG="$(basename "$REPO_ROOT")"
+  # Schema must match repo-validator.js, which looks up knownRepos.repos[].slug.
+  # A bare { "<slug>": { "path": ... } } map parses fine but matches nothing, so
+  # every POST /run would be rejected as "not in allowlist".
+  SLUG="$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]')"
   cat > "$REPOS_FILE" <<JSON
 {
-  "$SLUG": { "path": "$REPO_ROOT" }
+  "version": "1.0",
+  "repos": [
+    { "slug": "$SLUG", "path": "$REPO_ROOT", "primary_cli": "claude" }
+  ]
 }
 JSON
   echo "  seeded $REPOS_FILE with '$SLUG' -> $REPO_ROOT"
@@ -233,15 +252,14 @@ else
 fi
 
 # ── 5. Firewall (only when binding beyond loopback) ────────────────────────────
-if [ "$FIREWALL" = "yes" ] && command -v ufw &>/dev/null; then
-  if [ -n "$TS_IP" ] && [ "$HOST" = "$TS_IP" ]; then
-    # Tailnet-only bind: open the port on tailscale0, not on every interface.
-    echo "[5/6] Opening port $PORT in UFW on tailscale0 only..."
-    sudo ufw allow in on tailscale0 to any port "$PORT" proto tcp || true
-  else
-    echo "[5/6] Opening port $PORT in UFW..."
-    sudo ufw allow "$PORT/tcp" || true
-  fi
+if [ "$TAILSCALE_BIND" = "yes" ] && command -v ufw &>/dev/null; then
+  # Tailnet bind: default-deny-incoming drops packets arriving on tailscale0 too, so
+  # the port does need opening — but on that interface only, never LAN-wide.
+  echo "[5/6] Opening port $PORT in UFW on tailscale0 only..."
+  sudo ufw allow in on tailscale0 to any port "$PORT" proto tcp || true
+elif [ "$FIREWALL" = "yes" ] && command -v ufw &>/dev/null; then
+  echo "[5/6] Opening port $PORT in UFW..."
+  sudo ufw allow "$PORT/tcp" || true
 else
   echo "[5/6] Firewall: no change (loopback bind or UFW absent)."
 fi
@@ -309,11 +327,15 @@ if [ "$HOST" = "127.0.0.1" ] || [ "$HOST" = "localhost" ]; then
   echo "  Bound to loopback. Reach it from your workstation with an SSH tunnel:"
   echo "    ssh -L $PORT:127.0.0.1:$PORT <user>@<server>"
   echo "  then open http://localhost:$PORT/panel?key=\$(cat $KEY_FILE)"
-elif [ -n "$TS_IP" ] && [ "$HOST" = "$TS_IP" ]; then
-  echo "  Bound to the tailnet IP $TS_IP:$PORT — reachable only from devices on your"
-  echo "  tailnet. From your phone (Tailscale app connected), open:"
-  echo "    http://$TS_IP:$PORT/panel?key=<key>      # key: cat $KEY_FILE"
-  echo "  For HTTPS + a stable name: sudo tailscale serve --bg $PORT"
+elif [ "$TAILSCALE_BIND" = "yes" ]; then
+  echo "  Bound to the Tailscale address $HOST:$PORT."
+  echo "  Reachable from any device on the tailnet, and from nothing else — the port"
+  echo "  is opened on tailscale0 only, and no TLS cert is needed (WireGuard provides"
+  echo "  transport encryption and device identity)."
+  echo "  On your phone, open:"
+  echo "    http://$HOST:$PORT/panel?key=\$(cat $KEY_FILE)"
+  echo "  and use 'Add to Home Screen' to install it as a PWA."
+  echo "  For HTTPS + a stable name instead of the raw IP: sudo tailscale serve --bg $PORT"
 else
   echo "  Bound to $HOST:$PORT — put TLS + a trusted network in front (see"
   echo "  docs/mission-control-linux-deploy.md). Access key: $KEY_FILE"

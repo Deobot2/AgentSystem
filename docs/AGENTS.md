@@ -78,7 +78,7 @@ See "Bypassing Jarvis" section below for full guidance.
 5. **HANDOFF.md tracks blockers.** If Agent A waits on Agent B, note it in HANDOFF.md "What's blocked" section. Jarvis monitors on startup.
 6. **Escalation is transparent.** When escalating to Jarvis, state why in GitHub Discussion or agent memory.
 7. **Bypass is documented.** Users can invoke agents directly to skip Jarvis. Agent respects the direct request.
-8. **Sync script is authoritative.** Run `sync_agents_from_repo.ps1` after any agent definition change.
+8. **Sync script is authoritative.** Run `node tools/sync-agents.js` after any agent definition change.
 
 **Exception:** Ephemeral thinking (single session) doesn't need coordination. Only decisions/blockers that outlive the session.
 
@@ -248,7 +248,7 @@ See `agents-memory/quarterly-reviews.md` for full schedule and framework.
 
 **Sync process:**
 ```powershell
-.\sync_agents_from_repo.ps1
+node tools/sync-agents.js
 ```
 
 Generates agent configs for:

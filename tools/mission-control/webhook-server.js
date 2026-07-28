@@ -399,28 +399,63 @@ async function dispatchClaude(agent, prompt, repoPath) {
   return spawnAgent(agent, prompt, repoPath);
 }
 
-function getActiveSessions() {
+// The claude CLI cold-starts in ~13s on this box. Every shell-out needs a hard
+// timeout or a wedged CLI wedges the HTTP request behind it forever.
+const CLAUDE_TIMEOUT_MS = 25_000;
+
+function runClaude(args, timeoutMs = CLAUDE_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const child = spawn(CLAUDE, ['agents', '--json'], { env: { ...process.env, HOME } });
-    let out = '';
+    const child = spawn(CLAUDE, args, { env: { ...process.env, HOME } });
+    let out = '', err = '', settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ out, err });
+    };
+    const timer = setTimeout(() => { child.kill('SIGKILL'); finish(); }, timeoutMs);
     child.stdout?.on('data', d => out += d);
-    child.on('close', () => {
-      try { resolve(JSON.parse(out)); } catch { resolve([]); }
-    });
-    child.on('error', () => resolve([]));
+    child.stderr?.on('data', d => err += d);
+    child.on('close', finish);
+    child.on('error', finish);
   });
 }
 
-function getAgentLog(shortId) {
-  return new Promise((resolve) => {
-    const child = spawn(CLAUDE, ['logs', shortId], { env: { ...process.env, HOME } });
-    let out = '';
-    child.stdout?.on('data', d => out += d);
-    child.stderr?.on('data', d => out += d);
-    child.on('close', () => resolve(out));
-    child.on('error', () => resolve(''));
-    setTimeout(() => { child.kill(); resolve(out); }, 5000);
-  });
+// The panel polls /sessions every 15s. Without a cache each poll paid the full
+// ~13s CLI cold start, so the panel was never less than 13s stale and kept a
+// claude process resident more or less permanently. Serve the last good roster
+// immediately and refresh in the background instead.
+const ACTIVE_TTL_MS = 30_000;
+let activeCache = { at: 0, data: [] };
+let activeInflight = null;
+
+function refreshActiveSessions() {
+  if (activeInflight) return activeInflight;
+  activeInflight = runClaude(['agents', '--json'])
+    .then(({ out }) => {
+      try {
+        const parsed = JSON.parse(out);
+        // Keep the last good roster on a parse failure rather than blanking the panel.
+        if (Array.isArray(parsed)) activeCache = { at: Date.now(), data: parsed };
+      } catch { /* keep last good */ }
+      return activeCache.data;
+    })
+    .finally(() => { activeInflight = null; });
+  return activeInflight;
+}
+
+async function getActiveSessions() {
+  if (Date.now() - activeCache.at < ACTIVE_TTL_MS) return activeCache.data;
+  const pending = refreshActiveSessions();
+  // Nothing cached yet (first request after boot) — no choice but to wait.
+  return activeCache.at ? activeCache.data : pending;
+}
+
+async function getAgentLog(shortId) {
+  // Was 5s, which is shorter than the CLI's own cold start — so this always
+  // timed out empty and every background-session log fell through to a 404.
+  const { out, err } = await runClaude(['logs', shortId]);
+  return out + err;
 }
 
 function getRecentRuns(limit = 10) {
@@ -1204,6 +1239,8 @@ server.listen(PORT, HOST, () => {
   }
   console.log(`  Panel:   http://${HOST}:${PORT}/panel?key=<key>`);
   console.log(`  Key:     ${SECRET.slice(0,8)}...${SECRET.slice(-4)}\n`);
+  // Pay the CLI cold start once at boot so the first /sessions hit is warm.
+  refreshActiveSessions();
   if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
     console.warn(
       `  WARNING: bound to ${HOST}, not loopback-only. Anyone who can reach this ` +

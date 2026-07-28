@@ -90,3 +90,25 @@ test('memory-lookup: no match returns empty array', () => {
   assert.equal(results.length, 0);
   rmSync(join(dir, '..'), { recursive: true });
 });
+
+// Every test above passes --memory-root explicitly, so the DEFAULT path was never
+// exercised. It pointed at <root>/<agent>, a directory the system has never
+// created — real nodes live at <root>/nexus/agent-brain/<agent>/nodes. Result:
+// every default-path lookup silently found nothing.
+test('memory-lookup: default path resolves to nexus/agent-brain/<agent>/nodes', () => {
+  const root = join(tmpdir(), `memory-default-${process.pid}`);
+  const nodes = join(root, 'nexus', 'agent-brain', 'testagent', 'nodes');
+  mkdirSync(nodes, { recursive: true });
+  writeMemoryFile(nodes, 'auth.md', ['auth', 'jwt'], 'JWT auth patterns.');
+
+  const out = execFileSync(
+    process.execPath,
+    [join(process.cwd(), 'tools', 'memory-lookup.js'), 'testagent', 'auth', '--json'],
+    { encoding: 'utf8', cwd: process.cwd(), env: { ...process.env, AGENT_MEMORY_ROOT: root } }
+  );
+  const results = JSON.parse(out);
+  rmSync(root, { recursive: true, force: true });
+
+  assert.equal(results.length, 1, 'default path did not find the agent-brain node');
+  assert.equal(results[0].file, 'auth.md');
+});

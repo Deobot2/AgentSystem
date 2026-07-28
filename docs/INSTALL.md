@@ -157,16 +157,9 @@ gemini @friday
 
 Run once per repo to register it with the graph memory system and inject agent context.
 
-**Windows:**
-```powershell
-cd C:\path\to\your-repo
-powershell -File C:\path\to\AgentSystem\tools\bootstrap-repo.ps1
-```
-
-**Linux / macOS:**
 ```bash
 cd /path/to/your-repo
-node /path/to/AgentSystem/tools/graph/graph-init.js $(basename $PWD) $PWD
+node /path/to/AgentSystem/tools/bootstrap-repo.js
 ```
 
 What it does:
@@ -238,13 +231,6 @@ Priority labels: `priority:high`, `priority:medium`, `priority:low`
 
 When you change any `.agents/agents/*.md` file:
 
-**Windows:**
-```powershell
-.\sync_agents_from_repo.ps1
-# or: node tools/sync-agents.js
-```
-
-**Linux / macOS:**
 ```bash
 node tools/sync-agents.js
 ```

@@ -14,16 +14,28 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'mission-control', 'webhook-server.js');
 const KEY = 'test-key-do-not-use';
-// Derive from pid so parallel test runs don't collide on a fixed port.
-const PORT = 8700 + (process.pid % 90);
-const BASE = `http://127.0.0.1:${PORT}`;
 
-let home, proc;
+// Ask the OS for a free port instead of deriving one from the pid — `8700 + pid % 90`
+// collides whenever two concurrent `node --test` workers land in the same residue
+// class, and the loser fails with "server did not become ready".
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = createServer();
+    s.once('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const { port } = s.address();
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+let home, proc, PORT, BASE, serverErr = '';
 
 function api(p, opts = {}) {
   return fetch(BASE + p, {
@@ -41,10 +53,13 @@ async function waitForReady(timeoutMs = 15000) {
     } catch { /* not listening yet */ }
     await new Promise(r => setTimeout(r, 150));
   }
-  throw new Error('server did not become ready');
+  // Without the child's stderr the failure is undiagnosable from CI logs alone.
+  throw new Error(`server did not become ready on :${PORT}\n--- server stderr ---\n${serverErr}`);
 }
 
 test.before(async () => {
+  PORT = await freePort();
+  BASE = `http://127.0.0.1:${PORT}`;
   home = mkdtempSync(path.join(tmpdir(), 'mc-http-'));
   mkdirSync(path.join(home, '.claude'), { recursive: true });
   mkdirSync(path.join(home, 'agent-memory', 'nexus', 'tasks', 'demo', '42'), { recursive: true });
@@ -58,7 +73,7 @@ test.before(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout.on('data', () => {});
-  proc.stderr.on('data', () => {});
+  proc.stderr.on('data', d => { serverErr = (serverErr + d).slice(-2000); });
   await waitForReady();
 });
 
