@@ -30,6 +30,7 @@ workflows need — each step skipped when already present, so re-running is a no
 | `gh` (GitHub CLI) | official `cli.github.com` apt repo |
 | `claude` (Claude Code) | `https://claude.ai/install.sh` → `~/.local/bin/claude` |
 | `agy` (Antigravity CLI) | `https://antigravity.google/cli/install.sh` → `~/.local/bin/agy` |
+| `tailscale` *(only with `--with-tailscale`)* | `https://tailscale.com/install.sh` |
 
 `tmux` backs persistent `agy` sessions; the webhook server shells out to `claude`,
 `agy`, and `gh`, resolving `~/.local/bin` first. Pass `--no-clis` to skip the two
@@ -68,10 +69,11 @@ missing` if `node`/`gh` aren't there yet, so run the Mission Control bootstrap
 first. On an already-provisioned host either order works, and
 `./install.sh --with-mission-control` does both in one shot.
 
-Everything in one line, including CI runner and self-update:
+Everything in one line, including phone access over Tailscale, the CI runner, and
+self-update:
 
 ```bash
-bash tools/mission-control/install-local.sh --with-runner --with-auto-update
+bash tools/mission-control/install-local.sh --with-tailscale --with-runner --with-auto-update
 ```
 
 Do not run the installer with `sudo` — both CLI installers refuse to install into
@@ -114,6 +116,8 @@ non-issue — but both CLIs must be installed on this host.
 | `--bind <addr>` | Bind a specific address (e.g. a Tailscale IP `100.x.y.z`). Preferred over `--lan`. |
 | `--port <n>` | Listen port (default 8765). |
 | `--public-url <url>` | Advertise this base URL in API responses (behind a proxy/Tailscale). |
+| `--with-tailscale` | Install Tailscale, join the tailnet, bind the tailnet IP, and open the port on `tailscale0` only. Best option for phone access. |
+| `--tailscale-authkey <k>` | Join non-interactively. Prefer `TS_AUTHKEY=tskey-… bash …` — a flag is visible in `ps`. |
 | `--no-service` | Set everything up but don't install/start systemd (run manually). |
 
 ---
@@ -126,13 +130,21 @@ ssh -L 8765:127.0.0.1:8765 user@server
 # then open http://localhost:8765/panel?key=$(ssh user@server cat .claude/remote-webhook.key)
 ```
 
-**B. Tailscale (recommended for phone access).** Install Tailscale on the server
-and phone, then bind the Tailscale IP:
+**B. Tailscale (recommended for phone access).** The installer does the whole
+thing — installs Tailscale, joins the tailnet, binds that IP, sets `PUBLIC_URL`,
+and opens the port on `tailscale0` only:
 ```bash
-bash tools/mission-control/install-local.sh --bind "$(tailscale ip -4)" \
-  --public-url "http://$(tailscale ip -4):8765"
+bash tools/mission-control/install-local.sh --with-tailscale
+# it prints a login URL to authorise the server; or join non-interactively with a
+# pre-auth key from https://login.tailscale.com/admin/settings/keys :
+TS_AUTHKEY=tskey-auth-… bash tools/mission-control/install-local.sh --with-tailscale
 ```
-Only devices on your tailnet can reach it. Add `tailscale serve` for HTTPS.
+Only devices on your tailnet can reach it — install the Tailscale app on the phone
+and open the `http://100.x.y.z:8765/panel?key=…` URL the installer prints. For
+HTTPS and a stable hostname instead of the raw IP: `sudo tailscale serve --bg 8765`.
+
+An explicit `--bind`/`--lan` wins over the tailnet IP, so the manual form still
+works if Tailscale is already up: `--bind "$(tailscale ip -4)"`.
 
 **C. Public + reverse proxy with TLS.** If it must face the internet, never expose
 the Node port directly — front it with nginx/Caddy doing TLS, and bind the app to

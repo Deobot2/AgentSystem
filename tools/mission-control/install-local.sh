@@ -19,6 +19,11 @@
 #   --port <n>        Listen port (default 8765).
 #   --public-url <u>  Externally-reachable base URL to advertise (behind a proxy/Tailscale),
 #                     e.g. https://mc.example.com. Sets PUBLIC_URL in the unit.
+#   --with-tailscale  Install Tailscale, join the tailnet, and bind the tailnet IP so
+#                     only your own devices (phone, laptop) can reach the panel.
+#                     Interactive login unless an auth key is supplied.
+#   --tailscale-authkey <k>  Non-interactive tailnet join (or set TS_AUTHKEY in the
+#                     environment, which keeps the key out of the process list).
 #   --no-service      Do everything except install/start the systemd service.
 #   --with-runner     Also register a GitHub Actions self-hosted runner on this host
 #                     (Sam/Friday audits, /agent dispatch, cron). See install-runner.sh.
@@ -40,6 +45,7 @@ TEMPLATE="$SCRIPT_DIR/claude-webhook.service"
 # ── Defaults ───────────────────────────────────────────────────────────────────
 MODE="system"        # system | user
 HOST="127.0.0.1"
+HOST_EXPLICIT="no"   # did the caller pick the bind address themselves?
 PORT="8765"
 PUBLIC_URL=""
 INSTALL_SERVICE="yes"
@@ -48,21 +54,26 @@ WITH_RUNNER="no"
 RUNNER_TOKEN=""
 WITH_AUTO_UPDATE="no"
 INSTALL_CLIS="yes"   # install the claude / agy CLIs when they are missing
+WITH_TAILSCALE="no"
+TS_AUTHKEY="${TS_AUTHKEY:-}"   # env is preferred over the flag: not visible in `ps`
+TS_IP=""             # filled in once the box is on the tailnet
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)         MODE="user"; shift ;;
     --no-clis)      INSTALL_CLIS="no"; shift ;;
-    --lan)          HOST="0.0.0.0"; FIREWALL="yes"; shift ;;
-    --bind)         HOST="$2"; FIREWALL="yes"; shift 2 ;;
+    --lan)          HOST="0.0.0.0"; FIREWALL="yes"; HOST_EXPLICIT="yes"; shift ;;
+    --bind)         HOST="$2"; FIREWALL="yes"; HOST_EXPLICIT="yes"; shift 2 ;;
     --port)         PORT="$2"; shift 2 ;;
     --public-url)   PUBLIC_URL="$2"; shift 2 ;;
+    --with-tailscale) WITH_TAILSCALE="yes"; shift ;;
+    --tailscale-authkey) TS_AUTHKEY="$2"; shift 2 ;;
     --no-service)   INSTALL_SERVICE="no"; shift ;;
     --with-runner)  WITH_RUNNER="yes"; shift ;;
     --runner-token) RUNNER_TOKEN="$2"; shift 2 ;;
     --with-auto-update) WITH_AUTO_UPDATE="yes"; shift ;;
-    -h|--help)      sed -n '2,31p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -151,6 +162,44 @@ install_cli() {
 install_cli claude https://claude.ai/install.sh "claude CLI"
 install_cli agy https://antigravity.google/cli/install.sh "agy CLI"
 
+# Tailscale: opt-in, and the only exposure path that needs no TLS or open port —
+# the panel becomes reachable from your own devices and nothing else.
+if [ "$WITH_TAILSCALE" = "yes" ]; then
+  if command -v tailscale &>/dev/null; then
+    echo "  tailscale: $(command -v tailscale)"
+  else
+    echo "  Installing Tailscale from tailscale.com..."
+    # Vendor script; it elevates with sudo itself and installs the tailscaled unit.
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+  # Already logged in? `tailscale ip` only answers once the node has joined.
+  TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+  if [ -z "$TS_IP" ]; then
+    if [ -n "$TS_AUTHKEY" ]; then
+      echo "  Joining tailnet with the supplied auth key..."
+      sudo tailscale up --authkey "$TS_AUTHKEY" || true
+    else
+      echo "  Joining tailnet — open the URL below in a browser to authorise this server:"
+      sudo tailscale up || true
+    fi
+    TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+  fi
+  if [ -n "$TS_IP" ]; then
+    echo "  tailnet IP: $TS_IP"
+    # Bind it unless the caller already chose an address — an explicit --bind wins.
+    if [ "$HOST_EXPLICIT" = "no" ]; then
+      HOST="$TS_IP"
+      FIREWALL="yes"
+      [ -n "$PUBLIC_URL" ] || PUBLIC_URL="http://$TS_IP:$PORT"
+      echo "  binding the tailnet IP: $HOST:$PORT"
+    else
+      echo "  keeping the requested bind $HOST (--bind/--lan given)"
+    fi
+  else
+    echo "  !! not on a tailnet yet — run 'sudo tailscale up', then re-run this installer"
+  fi
+fi
+
 # ── 2. Directories + node deps ───────────────────────────────────────────────
 echo "[2/6] Preparing directories..."
 mkdir -p "$HOME/agent-memory/nexus/tasks" "$HOME/.claude/agent-runs"
@@ -185,8 +234,14 @@ fi
 
 # ── 5. Firewall (only when binding beyond loopback) ────────────────────────────
 if [ "$FIREWALL" = "yes" ] && command -v ufw &>/dev/null; then
-  echo "[5/6] Opening port $PORT in UFW..."
-  sudo ufw allow "$PORT/tcp" || true
+  if [ -n "$TS_IP" ] && [ "$HOST" = "$TS_IP" ]; then
+    # Tailnet-only bind: open the port on tailscale0, not on every interface.
+    echo "[5/6] Opening port $PORT in UFW on tailscale0 only..."
+    sudo ufw allow in on tailscale0 to any port "$PORT" proto tcp || true
+  else
+    echo "[5/6] Opening port $PORT in UFW..."
+    sudo ufw allow "$PORT/tcp" || true
+  fi
 else
   echo "[5/6] Firewall: no change (loopback bind or UFW absent)."
 fi
@@ -254,6 +309,11 @@ if [ "$HOST" = "127.0.0.1" ] || [ "$HOST" = "localhost" ]; then
   echo "  Bound to loopback. Reach it from your workstation with an SSH tunnel:"
   echo "    ssh -L $PORT:127.0.0.1:$PORT <user>@<server>"
   echo "  then open http://localhost:$PORT/panel?key=\$(cat $KEY_FILE)"
+elif [ -n "$TS_IP" ] && [ "$HOST" = "$TS_IP" ]; then
+  echo "  Bound to the tailnet IP $TS_IP:$PORT — reachable only from devices on your"
+  echo "  tailnet. From your phone (Tailscale app connected), open:"
+  echo "    http://$TS_IP:$PORT/panel?key=<key>      # key: cat $KEY_FILE"
+  echo "  For HTTPS + a stable name: sudo tailscale serve --bg $PORT"
 else
   echo "  Bound to $HOST:$PORT — put TLS + a trusted network in front (see"
   echo "  docs/mission-control-linux-deploy.md). Access key: $KEY_FILE"

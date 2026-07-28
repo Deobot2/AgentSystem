@@ -35,7 +35,7 @@ build_stubs() {
   local stub="$1"
   mkdir -p "$stub"
   local u tool
-  for u in bash sed mkdir cat chmod rm mktemp basename dirname whoami grep tee; do
+  for u in bash sh sed mkdir cat chmod cp rm mktemp basename dirname whoami grep tee head; do
     ln -sf "$(command -v "$u")" "$stub/$u"
   done
   # Recorders: every call is appended to $CALLS, nothing touches the system.
@@ -54,7 +54,9 @@ EOS
 #!/bin/bash
 echo "sudo $*" >> "$CALLS"
 while [ $# -gt 0 ]; do case "$1" in -E|-n) shift ;; *) break ;; esac; done
-if [ "${1:-}" = "apt-get" ]; then exec "$@"; fi
+# Forward the calls whose side effects the rest of the installer reads back:
+# apt-get "installs" packages, `tailscale up` flips the node to joined.
+case "${1:-}" in apt-get|tailscale) exec "$@" ;; esac
 # Drain piped stdin (`... | sudo tee <root path>`): exiting without reading it
 # would SIGPIPE the writer, which the installer's `set -o pipefail` treats as a
 # real failure. Real sudo+tee consumes it. Installer stdin is </dev/null.
@@ -89,6 +91,11 @@ echo "curl $url" >> "$CALLS"
 case "$url" in
   *claude.ai/install.sh) bin=claude ;;
   *antigravity.google/cli/install.sh) bin=agy ;;
+  # Vendor script; emit one that drops the fake CLI on PATH, like the real one.
+  *tailscale.com/install.sh)
+    echo "cp \"\$STUBDIR/.tailscale-src\" \"\$STUBDIR/tailscale\""
+    echo "chmod +x \"\$STUBDIR/tailscale\""
+    exit 0 ;;
   *) exit 0 ;;
 esac
 # stdout is piped into bash by the installer
@@ -97,6 +104,16 @@ echo "printf '#!/bin/sh\\n' > \"\$HOME/.local/bin/$bin\""
 echo "chmod +x \"\$HOME/.local/bin/$bin\""
 EOS
   chmod +x "$stub/curl"
+  # Staged out of PATH until "installed": reports an IP only once `up` has run.
+  cat > "$stub/.tailscale-src" <<'EOS'
+#!/bin/bash
+echo "tailscale $*" >> "$CALLS"
+case "${1:-}" in
+  ip) [ -f "$STUBDIR/.ts-joined" ] && echo "100.64.1.5" ;;
+  up) : > "$STUBDIR/.ts-joined" ;;
+esac
+exit 0
+EOS
 }
 
 run_installer() { # run_installer <case-name> [extra installer args...]
@@ -128,6 +145,23 @@ check "agy fetched from antigravity.google" \
 check "claude resolved after install" "claude CLI: $SANDBOX/fresh/.local/bin/claude" "$OUT"
 check "agy resolved after install" "agy CLI: $SANDBOX/fresh/.local/bin/agy" "$OUT"
 check "auth follow-up printed" "gh auth login" "$OUT"
+check_absent "tailscale untouched without the flag" "tailscale" "$CALLS_F"
+check "loopback bind by default" "HOST=127.0.0.1" "$OUT"
+
+echo "=== fresh box, --with-tailscale ==="
+run_installer ts --with-tailscale --tailscale-authkey tskey-test
+OUT_TS="$SANDBOX/ts.out"; CALLS_TS="$SANDBOX/ts.calls"
+check "tailscale installed from tailscale.com" \
+  "curl https://tailscale.com/install.sh" "$CALLS_TS"
+check "joins the tailnet with the auth key" "sudo tailscale up --authkey tskey-test" "$CALLS_TS"
+check "tailnet IP discovered" "tailnet IP: 100.64.1.5" "$OUT_TS"
+check "binds the tailnet IP" "binding the tailnet IP: 100.64.1.5:8765" "$OUT_TS"
+check "server told to bind it" "HOST=100.64.1.5" "$OUT_TS"
+
+echo "=== --with-tailscale, explicit --bind wins ==="
+run_installer tsbind --with-tailscale --tailscale-authkey tskey-test --bind 10.0.0.5
+check "explicit bind kept" "keeping the requested bind 10.0.0.5" "$SANDBOX/tsbind.out"
+check_absent "tailnet IP not bound" "binding the tailnet IP" "$SANDBOX/tsbind.out"
 
 echo "=== fresh box, --no-clis ==="
 run_installer noclis --no-clis
