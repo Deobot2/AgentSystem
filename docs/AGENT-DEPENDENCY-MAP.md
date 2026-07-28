@@ -95,7 +95,7 @@ Detect → Sam (owns it) → Jarvis (escalation if >30min blocker)
 | Wanda | Design review stalled | Astra waiting >1h | Astra proceeds with best judgment | 1h | Friday unblocks |
 | Nat | Strategy decision stalled | No response >24h | Jarvis retries | 24h | Jarvis decides |
 | Threepio | Docs incomplete | PR review comment | Threepio retries | 30 min | Domain expert fills gaps |
-| Memory sync | Sync lag between CLIs | File timestamp check fails | Leo retries sync job | 5 min | Manual `sync_agents_from_repo.ps1` |
+| Memory sync | Sync lag between CLIs | File timestamp check fails | Leo retries sync job | 5 min | Manual `node tools/sync-agents.js` |
 
 ---
 

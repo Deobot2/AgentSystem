@@ -21,7 +21,7 @@
  *   node session-namer.js --today
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, createReadStream, realpathSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
@@ -741,7 +741,17 @@ Registry: ${REGISTRY}
 // Only auto-run the CLI when this file is executed directly (e.g.
 // `node tools/session-namer.js --sweep`), not when it's `import`ed by the
 // test suite to unit-test pure helpers like cwdToProjectDir.
-const isMainModule = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+//
+// argv[1] must be realpath'd before comparing: `import.meta.url` is always the
+// symlink-resolved path, so every caller that reaches this file through a
+// symlink -- which is ALL of them, since ~/dev/AgentSystem is a symlink to the
+// real checkout and the installed hooks + /rename-session invoke
+// `node ~/dev/AgentSystem/tools/session-namer.js` -- failed this check and
+// exited 0 having done absolutely nothing. Silent, exit-code-clean no-op.
+const isMainModule = process.argv[1] && (() => {
+  const href = (p) => { try { return pathToFileURL(realpathSync(p)).href; } catch { return pathToFileURL(p).href; } };
+  return href(process.argv[1]) === import.meta.url;
+})();
 if (isMainModule) main();
 
 // ═══════════════════════════════════════════════════════════════════════════

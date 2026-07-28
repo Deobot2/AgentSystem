@@ -4,7 +4,7 @@
  *
  * Regression coverage for #154: hooks/routine-dispatch.js already parsed PostToolUse Bash
  * payloads (tool_input.command / tool_response) to detect `gh pr create` and schedule the
- * auto-resolve-pr-comments routine, but the settings hook registration (sync_hooks_from_repo.ps1)
+ * auto-resolve-pr-comments routine, but the settings hook registration
  * only wired routine-dispatch.js to the `Write|Edit|NotebookEdit` PostToolUse matcher — it was
  * never invoked with Bash tool events at all, so the routine never fired in practice. This suite
  * locks in that the dispatcher's own Bash-handling logic behaves correctly (the settings-side
@@ -14,13 +14,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOOK_REGISTRY } from '../tools/deploy-hooks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOK = join(__dirname, '..', 'hooks', 'routine-dispatch.js');
-const SYNC_SCRIPT = join(__dirname, '..', 'sync_hooks_from_repo.ps1');
 
 function runHook(payload) {
   return execFileSync('node', [HOOK], {
@@ -77,18 +76,15 @@ describe('routine-dispatch.js PostToolUse Bash handling', () => {
   });
 });
 
-describe('sync_hooks_from_repo.ps1 registers routine-dispatch.js on the Bash PostToolUse matcher (#154)', () => {
+describe('HOOK_REGISTRY registers routine-dispatch.js on the Bash PostToolUse matcher (#154)', () => {
   it('has a PostToolUse hook entry for routine-dispatch.js with matcher = Bash', () => {
-    const script = readFileSync(SYNC_SCRIPT, 'utf8');
-    // Find each PostToolUse block that runs routine-dispatch.js and collect its matcher.
-    const blocks = script.split(/(?=\[PSCustomObject\]@\{)/).filter(b =>
-      /event\s*=\s*'PostToolUse'/.test(b) && /routine-dispatch\.js/.test(b)
-    );
+    const entries = HOOK_REGISTRY.filter(e =>
+      e.event === 'PostToolUse' && /routine-dispatch\.js/.test(e.command));
     // 2026-07-12 audit: the Write|Edit|NotebookEdit registration was removed — routine-dispatch's
     // only PostToolUse job is detecting `gh pr create` in Bash output, so exactly one Bash
     // matcher is the correct wiring now.
-    assert.ok(blocks.length >= 1, 'expected routine-dispatch.js registered on the Bash PostToolUse matcher');
-    const matchers = blocks.map(b => (b.match(/matcher\s*=\s*'([^']+)'/) || [])[1]);
+    assert.ok(entries.length >= 1, 'expected routine-dispatch.js registered on the Bash PostToolUse matcher');
+    const matchers = entries.map(e => e.matcher);
     assert.ok(matchers.includes('Bash'), `expected a Bash matcher among ${JSON.stringify(matchers)}`);
   });
 });

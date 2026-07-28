@@ -12,7 +12,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MASTER_MEMORY_DIR="${REPO_ROOT}/.agents/memory"
-SYNC_SCRIPT="${REPO_ROOT}/sync_agents_from_repo.ps1"
 SKIP_CLI_SYNC="${SKIP_CLI_SYNC:-false}"
 
 PASS=0
@@ -254,7 +253,7 @@ echo "========================================"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "RESULT: FAILED — $FAIL test(s) did not pass."
-  echo "Recovery: run 'powershell -File sync_agents_from_repo.ps1' to resync"
+  echo "Recovery: run 'node tools/sync-agents.js' to resync"
   exit 1
 else
   echo "RESULT: PASSED — all $PASS tests passed."
