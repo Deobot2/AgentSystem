@@ -310,9 +310,9 @@ Expected output contains `[trust: 82%]` (Friday's current score). No throw, exit
 | threepio | claude-haiku-4-5-20251001 | 1 | General non-technical worker |
 | r2d2 | claude-haiku-4-5-20251001 | 1 | General technical worker |
 
-`config/models.yml` is the single source of truth. Agent frontmatter `model:` fields must match.
+The `MODELS` map in `tools/sync-agents.js` is the single source of truth (`config/models.yml` was read by nothing and has been deleted). Agent frontmatter `model:` fields must match.
 
-**Quality safety valve:** Friday's `spawn_tiers` block in models.yml lets any spawn be escalated to sonnet or opus via `--model=<tier>` when the subtask is complex (architecture, security, >15 files). Base assignment is haiku; complex override is explicit.
+**Quality safety valve:** any spawn can be escalated to sonnet or opus via `--model=<tier>` when the subtask is complex (architecture, security, >15 files). Base assignment is haiku; complex override is explicit.
 
 **CC upgrade note:** `claude-opus-4-8` requires Claude Code ≥ 2.1.154. Run `claude update` before jarvis sessions if on an older version.
 
