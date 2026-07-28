@@ -56,6 +56,12 @@ test('tool-output-compress is deliberately not registered', () => {
     'tool-output-compress costs context rather than saving it — see deploy-hooks.js');
 });
 
+// Shipped inert once already: the hook file existed but nothing referenced it.
+test('every hook file under hooks/ that is meant to run is registered', () => {
+  assert.ok(HOOK_REGISTRY.some(e => e.event === 'SessionEnd' && /session-auto-rename-hook/.test(e.command)),
+    'session-auto-rename-hook.js must be a SessionEnd hook or it never runs');
+});
+
 test('same command on two events registers under both', () => {
   const s = {};
   mergeHookSettings(s);

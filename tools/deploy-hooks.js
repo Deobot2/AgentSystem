@@ -104,6 +104,9 @@ export const HOOK_REGISTRY = [
   { event: 'UserPromptSubmit', command: b('user-prompt-submit.sh'),             timeout: 5,  statusMessage: 'Registering prompt...' },
   { event: 'SessionEnd',       command: n('memory-capture-hook.js'),            timeout: 5,  statusMessage: 'Capturing memory...' },
   { event: 'SessionEnd',       command: b('session-close.sh'),                  timeout: 10, statusMessage: 'Finalizing session...' },
+  // Third SessionEnd hook (see CLAUDE.md "Session Naming"). Two-phase: returns in
+  // ~80ms after spawning a detached worker, so the 5s timeout is not the model call.
+  { event: 'SessionEnd',       command: n('session-auto-rename-hook.js'),       timeout: 5,  statusMessage: 'Naming session...' },
   // routine-dispatch is Bash-scoped: its payload inspection only ever applies to
   // Bash events (see the 2026-07-12 audit notes in the retired .ps1).
   { event: 'PostToolUse',      command: b('wip-checkpoint.sh'),                 timeout: 5,  statusMessage: 'Saving checkpoint...',          matcher: 'Write|Edit|NotebookEdit' },
