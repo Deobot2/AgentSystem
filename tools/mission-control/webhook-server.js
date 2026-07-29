@@ -288,13 +288,17 @@ function pruneRecentSpawnKeys(now) {
   }
 }
 
-function spawnAgent(agent, prompt, cwd = HOME) {
+// `model` is an optional per-task override of the agent's default from MODELS.claude in
+// tools/sync-agents.js — a full model id (e.g. claude-sonnet-5), which is what the CLI takes
+// (the in-session Agent tool takes aliases instead). Null means "use the agent's default".
+function spawnAgent(agent, prompt, cwd = HOME, model = null) {
   return new Promise(async (resolve) => {
     const now = Date.now();
     pruneRecentSpawnKeys(now);
 
-    // 1. Debounce/dedup: skip identical agent+cwd spawns within the window.
-    const dedupeKey = `${agent}|${cwd}`;
+    // 1. Debounce/dedup: skip identical agent+cwd+model spawns within the window. Model is part
+    // of the key so re-running the same task at a different tier is not swallowed as a duplicate.
+    const dedupeKey = `${agent}|${cwd}|${model || 'default'}`;
     const lastSpawn = recentSpawnKeys.get(dedupeKey);
     if (lastSpawn && (now - lastSpawn) < SPAWN_DEDUPE_WINDOW_MS) {
       console.log(`[spawn-guard] Skipped duplicate spawn for agent=${agent} cwd=${cwd} (last spawned ${now - lastSpawn}ms ago, window=${SPAWN_DEDUPE_WINDOW_MS}ms)`);
@@ -319,7 +323,7 @@ function spawnAgent(agent, prompt, cwd = HOME) {
         const evt = publishEvent({
           type: 'spawn-agent',
           source: 'webhook-server:concurrency_cap',
-          payload: { agent, prompt, cwd },
+          payload: { agent, prompt, cwd, model },
         });
         queuedId = evt.id;
         console.log(`[spawn-guard] Queued spawn on event bus id=${evt.id}`);
@@ -337,7 +341,8 @@ function spawnAgent(agent, prompt, cwd = HOME) {
 
     // Use --bg for proper daemon-managed background sessions
     // stdout: "backgrounded · <8-char-id>"
-    const child = spawn(CLAUDE, ['--bg', '--agent', agent, '-p', prompt], {
+    const bgArgs = ['--bg', '--agent', agent, ...(model ? ['--model', model] : []), '-p', prompt];
+    const child = spawn(CLAUDE, bgArgs, {
       cwd: existsSync(cwd) ? cwd : HOME,
       env: { ...process.env, HOME },
       windowsHide: true,
@@ -366,7 +371,7 @@ function spawnAgent(agent, prompt, cwd = HOME) {
     // Fallback: if spawn fails, log to file
     child.on('error', () => {
       const logFd = openSync(logFile, 'w');
-      const fallback = spawn(CLAUDE, ['--agent', agent, '-p', prompt], {
+      const fallback = spawn(CLAUDE, ['--agent', agent, ...(model ? ['--model', model] : []), '-p', prompt], {
         cwd: existsSync(cwd) ? cwd : HOME,
         detached: true,
         windowsHide: true,
@@ -393,10 +398,11 @@ function spawnAgent(agent, prompt, cwd = HOME) {
  * @param {string} agent - Agent name
  * @param {string} prompt - Task prompt
  * @param {string} repoPath - Working directory
+ * @param {string|null} model - Optional per-task model override (full id, e.g. claude-sonnet-5)
  * @returns {Promise<{sessionId, logPath, logFile, pid}>}
  */
-async function dispatchClaude(agent, prompt, repoPath) {
-  return spawnAgent(agent, prompt, repoPath);
+async function dispatchClaude(agent, prompt, repoPath, model = null) {
+  return spawnAgent(agent, prompt, repoPath, model);
 }
 
 // The claude CLI cold-starts in ~13s on this box. Every shell-out needs a hard
@@ -847,6 +853,12 @@ async function handleRequest(req, res) {
         return json(res, 400, { error: `Unknown harness "${harness}". Valid: claude, agy` });
       }
 
+      // model reaches a spawn arg list here and (on a concurrency-cap requeue) a win32 shell
+      // string in event-dispatcher.js, so it is shape-checked at the boundary, not downstream.
+      if (model !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(String(model))) {
+        return json(res, 400, { error: `Invalid model id: ${model}` });
+      }
+
       // Validate repo against allowlist
       const knownRepos = loadKnownRepos();
       let repoPath;
@@ -874,7 +886,9 @@ async function handleRequest(req, res) {
         repo,
         prompt,
         agent: harness === 'claude' ? agent : null,
-        model: harness === 'agy' ? model : null,
+        // Recorded for both harnesses — the claude harness honors it too now (--model), so the
+        // panel must be able to show which tier a session actually ran at.
+        model,
       });
 
       try {
@@ -890,7 +904,7 @@ async function handleRequest(req, res) {
             registry.exitSession(sessionRecord.id, 1);
             return json(res, 400, { error: `Unknown agent: ${agent}` });
           }
-          dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath);
+          dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath, model);
         } else {
           // Dispatch agy
           dispatchResult = await spawnAgyPersistent(prompt, repoPath, model);

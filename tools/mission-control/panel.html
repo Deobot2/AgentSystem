@@ -826,6 +826,7 @@
   <div id="panel-briefing" class="panel-content">
     <section class="glass-card">
       <h2 id="briefing-title">📰 Daily Briefing</h2>
+      <button id="briefing-run-btn" onclick="runBriefing()">▶ Run briefing now</button>
       <pre id="briefing-body" class="terminal-box" style="max-height: 70vh;">
         <div class="loading">Loading briefing...</div>
       </pre>
@@ -1454,6 +1455,41 @@
         body.textContent = data.markdown || 'Briefing is empty.';
       } catch (e) {
         body.innerHTML = '<div class="error">' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    // Dispatch the Life OS daily-briefing skill on demand (the 6am UTC cron in
+    // scheduled-tasks.yml runs the same thing). The digest lands in $LIFE_REPO/briefings, which is
+    // what loadBriefing() reads — so the tab only updates once the agent finishes, not on click.
+    async function runBriefing() {
+      const btn = document.getElementById('briefing-run-btn');
+      btn.disabled = true;
+      btn.textContent = 'Dispatching…';
+      try {
+        const data = await api('/run', {
+          method: 'POST',
+          body: JSON.stringify({
+            harness: 'claude',
+            repo: 'agentsystem',
+            agent: 'threepio',
+            // Overrides threepio's haiku default — a full mail sweep plus two Notion
+            // databases regularly exceeds haiku's 200K window.
+            model: 'claude-sonnet-5',
+            // The cron pipes the agent's stdout into the digest file; a --bg spawn has no pipe, so
+            // this path asks the agent to write it. Same filename GET /briefing serves.
+            prompt: 'Read ~/dev/AgentSystem/skills/daily-briefing/SKILL.md and execute it now. '
+              + 'Then write the digest with the Write tool to '
+              + '${LIFE_REPO:-$HOME/life}/briefings/<today as YYYY-MM-DD>.md, creating the '
+              + 'directory if needed, so the Mission Control Briefing tab can render it.',
+          })
+        });
+        alert('Briefing dispatched. Session ID: ' + data.id + '\nRefresh this tab once it finishes.');
+        loadSessions();
+      } catch (e) {
+        alert('Briefing dispatch failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '▶ Run briefing now';
       }
     }
 
