@@ -158,6 +158,11 @@ mkdirSync(LOG_DIR, { recursive: true });
 // Initialize Mission Control registry (for both claude + agy sessions)
 const registry = new SessionRegistry(MC_REGISTRY_FILE);
 
+// Agent roster — valid for BOTH harnesses. tools/sync-agents.js deploys the same
+// .agents/agents/*.md set to ~/.claude/agents (Claude) and to the `agentsystem` agy
+// plugin (Antigravity), so `--agent <name>` accepts these names on either side.
+const VALID_AGENTS = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
+
 // Reconcile any stale active sessions on server startup
 function reconcileRegistryOnStartup() {
   try {
@@ -173,6 +178,21 @@ function reconcileRegistryOnStartup() {
   }
 }
 reconcileRegistryOnStartup();
+
+// Nothing tells the registry when an agy process ends — only the startup reconcile did,
+// so one finished agy session stayed status=running for the life of the server and the
+// per-harness concurrency cap 409'd every later Antigravity dispatch. Poll liveness by
+// pid instead (signal 0 = existence check, no signal delivered).
+function reapDeadAgySessions() {
+  for (const s of registry.getRunning()) {
+    if (s.harness !== 'agy' || !s.pid) continue;
+    try {
+      process.kill(s.pid, 0);
+    } catch {
+      registry.exitSession(s.id, 0);
+    }
+  }
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -751,6 +771,7 @@ async function handleRequest(req, res) {
 
   // GET /sessions — live from claude agents --json + agy sessions from registry
   if (req.method === 'GET' && pathname === '/sessions') {
+    reapDeadAgySessions();
     const claudeSessions = await getActiveSessions();
     const roster = getSessions(); // from roster.json as fallback
     const sessions = claudeSessions.length ? claudeSessions : roster;
@@ -859,6 +880,7 @@ async function handleRequest(req, res) {
 
       // CONCURRENCY CAP: Enforce max 1 concurrent session per harness (CEO requirement)
       // See https://github.com/Zene8/AgentSystem/issues/95 — autonomy constraints
+      reapDeadAgySessions();
       const running = registry.getRunning().filter(s => s.harness === harness);
       if (running.length > 0) {
         return json(res, 409, {
@@ -868,32 +890,31 @@ async function handleRequest(req, res) {
         });
       }
 
+      // The roster is synced to BOTH harnesses by tools/sync-agents.js (agy gets it as
+      // the `agentsystem` plugin), so the same names are valid for agy via `agy --agent`.
+      if (agent && !VALID_AGENTS.includes(agent.toLowerCase())) {
+        return json(res, 400, { error: `Unknown agent: ${agent}` });
+      }
+      if (harness === 'claude' && !agent) {
+        return json(res, 400, { error: 'agent required for claude harness' });
+      }
+
       // Create session registry entry
       const sessionRecord = registry.createSession({
         harness,
         repo,
         prompt,
-        agent: harness === 'claude' ? agent : null,
+        agent: agent ? agent.toLowerCase() : null,
         model: harness === 'agy' ? model : null,
       });
 
       try {
         let dispatchResult;
         if (harness === 'claude') {
-          // Dispatch claude agent
-          if (!agent) {
-            registry.exitSession(sessionRecord.id, 1);
-            return json(res, 400, { error: 'agent required for claude harness' });
-          }
-          const validAgents = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
-          if (!validAgents.includes(agent.toLowerCase())) {
-            registry.exitSession(sessionRecord.id, 1);
-            return json(res, 400, { error: `Unknown agent: ${agent}` });
-          }
           dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath);
         } else {
-          // Dispatch agy
-          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model);
+          // Dispatch agy — agent is optional; omitted means agy's default agent.
+          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model, agent ? agent.toLowerCase() : null);
         }
 
         // Update registry with dispatch result
@@ -937,9 +958,8 @@ async function handleRequest(req, res) {
       const { agent = 'jarvis', prompt, cwd = HOME } = parsed;
       if (!prompt) return json(res, 400, { error: 'prompt required' });
 
-      const validAgents = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
-      if (!validAgents.includes(agent.toLowerCase())) {
-        return json(res, 400, { error: `Unknown agent. Valid: ${validAgents.join(', ')}` });
+      if (!VALID_AGENTS.includes(agent.toLowerCase())) {
+        return json(res, 400, { error: `Unknown agent. Valid: ${VALID_AGENTS.join(', ')}` });
       }
 
       const running = registry.getRunning().filter(s => s.harness === 'claude');

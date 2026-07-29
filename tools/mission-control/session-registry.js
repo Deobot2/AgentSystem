@@ -55,7 +55,7 @@ export class SessionRegistry {
    * @param {string} opts.harness - 'claude' or 'agy'
    * @param {string} opts.repo - Repo slug
    * @param {string} opts.prompt - Task prompt
-   * @param {string} [opts.agent] - Agent name (for claude)
+   * @param {string} [opts.agent] - Agent name (both harnesses; optional for agy)
    * @param {string} [opts.model] - Model override (for agy)
    * @returns {object} Created session
    */
@@ -79,8 +79,11 @@ export class SessionRegistry {
 
     const session = {
       id,
+      // Both harnesses run the same agent roster (synced by tools/sync-agents.js),
+      // so an agy session keeps its agent too — nulling it here is what made
+      // Antigravity sessions render as a nameless "Antigravity" row in the panel.
+      agent,
       harness,
-      agent: harness === 'claude' ? agent : null,
       model: harness === 'agy' ? model : null,
       repo,
       prompt,

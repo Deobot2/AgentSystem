@@ -29,10 +29,11 @@ const AGY_CLI = 'agy'; // Assume agy is in PATH
  *   logPath: null (agy manages its own history)
  *   status: 'running' (agy runs one-shot)
  */
-export async function spawnAgyOneShotDirect(prompt, repoPath, model = null) {
+export async function spawnAgyOneShotDirect(prompt, repoPath, model = null, agent = null) {
   return new Promise((resolve, reject) => {
     const args = ['-p', prompt, '--add-dir', repoPath];
     if (model) args.push('--model', model);
+    if (agent) args.push('--agent', agent);
 
     // TODO: Add --dangerously-skip-permissions for MC context (requires confirmation)
     // args.push('--dangerously-skip-permissions');
@@ -81,18 +82,19 @@ export async function spawnAgyOneShotDirect(prompt, repoPath, model = null) {
  * @param {string} [continueId] - Resume from previous conversation
  * @returns {Promise<{sessionId: string, tmuxSession: string, logPath: string, status: string}>}
  */
-export async function spawnAgyPersistent(prompt, repoPath, model = null, continueId = null) {
+export async function spawnAgyPersistent(prompt, repoPath, model = null, agent = null, continueId = null) {
   try {
-    const result = await spawnAgyPersistentImpl({ prompt, repoPath, model, continueId });
+    const result = await spawnAgyPersistentImpl({ prompt, repoPath, model, agent, continueId });
     return {
       sessionId: result.conversationId,
       tmuxSession: result.tmuxSessionName,
+      pid: result.pid,
       logPath: result.logPath,
       status: 'running',
     };
   } catch (e) {
     console.warn('[agy-dispatcher] spawnAgyPersistent failed, falling back to one-shot:', e.message);
-    const result = await spawnAgyOneShotDirect(prompt, repoPath, model);
+    const result = await spawnAgyOneShotDirect(prompt, repoPath, model, agent);
     return {
       sessionId: continueId || 'agy-oneShotFallback',
       tmuxSession: null,
