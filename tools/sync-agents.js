@@ -22,8 +22,16 @@ const HOME       = homedir();
 // consumer, agent-context-inject.js, was never written) so it has been deleted
 // rather than left as a second copy to drift against.
 // ultron/pym/leo/astra are tier-1 specialist workers (downgraded to cheapest tier in ede47b6).
+// These are DEFAULTS ONLY. A supervisor overrides per task via the Agent tool's `model`
+// (aliases fable|opus|sonnet|haiku) or `claude --bg --model <full-id>` -- see the
+// `model-override` shared block in .agents/rules/shared-blocks.md.
+// Tier notes: there is no Haiku 4.6 -- current Haiku is 4.5, and it is the only tier
+// capped at 200K ctx (every other tier is 1M). jarvis moved off claude-opus-4-8 to
+// claude-opus-5 (identical $5/$25, current head of tier). sam is opus because it is the
+// hard gate on every main merge -- a missed finding there is the costliest error class.
+// claude-fable-5 is intentionally nobody's default at $10/$50; reach it via override.
 const MODELS = {
-  claude:  { jarvis:'claude-opus-4-8', sam:'claude-sonnet-5', friday:'claude-sonnet-5', nat:'claude-sonnet-5', ultron:'claude-haiku-4-5-20251001', pym:'claude-haiku-4-5-20251001', leo:'claude-haiku-4-5-20251001', astra:'claude-haiku-4-5-20251001', wanda:'claude-haiku-4-5-20251001', threepio:'claude-haiku-4-5-20251001', r2d2:'claude-haiku-4-5-20251001' },
+  claude:  { jarvis:'claude-opus-5', sam:'claude-opus-5', friday:'claude-sonnet-5', nat:'claude-sonnet-5', 'clarification-needed':'claude-sonnet-5', ultron:'claude-haiku-4-5-20251001', pym:'claude-haiku-4-5-20251001', leo:'claude-haiku-4-5-20251001', astra:'claude-haiku-4-5-20251001', wanda:'claude-haiku-4-5-20251001', threepio:'claude-haiku-4-5-20251001', r2d2:'claude-haiku-4-5-20251001' },
   gemini:  { jarvis:'gemini-3.1-pro-preview', sam:'gemini-3.1-pro-preview', friday:'gemini-3-flash-preview', nat:'gemini-3-flash-preview', ultron:'gemini-3.1-flash-lite-preview', pym:'gemini-3.1-flash-lite-preview', leo:'gemini-3.1-flash-lite-preview', astra:'gemini-3.1-flash-lite-preview', wanda:'gemini-3.1-flash-lite-preview', threepio:'gemini-3.1-flash-lite-preview', r2d2:'gemini-3.1-flash-lite-preview' },
 };
 

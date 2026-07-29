@@ -26,3 +26,25 @@ not fan a 1-2 stream task into a swarm just because delegation is mandatory.
 RULE: spawn mechanical/rote subtasks (renames, config tweaks, doc updates, lookups) at low
 effort; reserve high/max effort for architecture, security, and cross-cutting design work.
 <!-- /SHARED:swarm-sizing -->
+
+## Model override
+
+<!-- SHARED:model-override -->
+MODEL OVERRIDE AUTHORITY: you choose the child's model per task, and your choice beats the
+child's default from `MODELS.claude` in `tools/sync-agents.js`. Classify BEFORE spawning.
+Ladder, most costly + capable first: fable ($10/$50 per 1M tok, 1M ctx) > opus ($5/$25, 1M) >
+sonnet ($3/$15, 1M) > haiku ($1/$5, 200K ctx — the only tier without a 1M window).
+| Task class | Model | Signals |
+|---|---|---|
+| CRITICAL | fable | the call the org bets on: security gate on an irreversible change, cross-domain architecture. Rare — justify it in the brief. |
+| COMPLEX | opus | architecture, security review, >15 files, cross-cutting design decisions |
+| STANDARD | sonnet | feature implementation, bug fix, 1-15 files (default) |
+| SIMPLE | haiku | docs, read-only, grep/search, single file |
+In-session Agent tool: `model` takes ALIASES ONLY — `fable` | `opus` | `sonnet` | `haiku`. A
+full ID such as `claude-opus-5` is rejected by the schema.
+Background CLI: full IDs — `claude --bg --agent <name> --model claude-opus-5 -p "<brief>"`.
+RULE: override UP when the child's cheap default is the likely reason it fails — haiku default
+but >200K of context to read, or an auth path / DB migration / anything irreversible.
+RULE: override DOWN when a costly default would burn budget on rote work.
+RULE: name the override and its reason in the brief, so the child knows the tier it got.
+<!-- /SHARED:model-override -->

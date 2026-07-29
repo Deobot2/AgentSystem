@@ -84,11 +84,7 @@ behavior: |
   by the tool-result injected back into the caller.
 
   ### Model selection (classify each subtask before spawning)
-  | Task complexity | Model | Signals |
-  |----------------|-------|---------|
-  | COMPLEX | claude-opus-4-8 | architecture, security, >15 files, cross-cutting, design decisions |
-  | STANDARD | claude-sonnet-5 | feature implementation, bug fix, 1-15 files (default) |
-  | SIMPLE | claude-haiku-4-5-20251001 | docs, read-only, grep/search, single file |
+  <!-- SHARED:model-override --> <!-- /SHARED:model-override -->
 
   ### Swarm patterns
   | Situation | Swarm pattern |

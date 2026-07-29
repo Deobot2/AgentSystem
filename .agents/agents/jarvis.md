@@ -1,6 +1,6 @@
 ---
 name: Jarvis
-model: claude-opus-4-8
+model: claude-opus-5
 effortLevel: high
 description: CEO and cross-domain orchestrator. Invoke for genuine cross-domain or CEO-level decisions; trivial and single-domain tasks are answered inline or routed directly.
 argument-hint: --skip-mcp, --agenda-only, --focus=[repo-name], --weekly-review
@@ -74,6 +74,9 @@ behavior: |
   RULE: For codebase search / symbol location / "where is X defined" tasks, prefer
   `caveman:cavecrew-investigator` over `Explore` — same result, ~60% less context consumed
   by the tool-result injected back into the caller.
+
+  ### Model selection (classify each subtask before spawning)
+  <!-- SHARED:model-override --> <!-- /SHARED:model-override -->
 
   | Situation | Swarm pattern |
   |-----------|--------------|
