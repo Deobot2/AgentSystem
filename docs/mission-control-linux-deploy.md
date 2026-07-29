@@ -20,21 +20,54 @@ server — use this document.
 - A **repo allowlist** at `~/agent-memory/nexus/known-repos.json` (seeded with the
   current repo; `POST /run` refuses any repo not listed here).
 
-Requirements: Node ≥ 20 (installer pulls Node 22), `tmux` (for persistent `agy`
-sessions), and the `claude` CLI on `PATH` or at `~/.local/bin/claude` (the server
-shells out to it — install it separately; the agent harness itself).
+On a fresh server the installer also bootstraps everything the server and the CI
+workflows need — each step skipped when already present, so re-running is a no-op:
+
+| Dependency | Source |
+|------------|--------|
+| `curl`, `git`, `tmux`, `jq`, `openssl`, `ca-certificates` | apt (one transaction) |
+| Node.js 22 LTS | `deb.nodesource.com/setup_22.x` |
+| `gh` (GitHub CLI) | official `cli.github.com` apt repo |
+| `claude` (Claude Code) | `https://claude.ai/install.sh` → `~/.local/bin/claude` |
+| `agy` (Antigravity CLI) | `https://antigravity.google/cli/install.sh` → `~/.local/bin/agy` |
+| `tailscale` *(only with `--with-tailscale`)* | `https://tailscale.com/install.sh` |
+
+`tmux` backs persistent `agy` sessions; the webhook server shells out to `claude`,
+`agy`, and `gh`, resolving `~/.local/bin` first. Pass `--no-clis` to skip the two
+agent CLIs (offline box, or you manage them yourself).
+
+**The installer cannot log you in.** After it finishes, run each of these once:
+
+```bash
+claude              # sign in (or: claude setup-token for a headless token)
+agy                 # sign in to Antigravity
+gh auth login       # PR actions + self-hosted runner registration
+```
+
+Until then dispatch requests reach the server and fail on auth.
 
 ---
 
 ## 2. Install
 
+On a bare Ubuntu/Debian box, from a normal (non-root) user with sudo:
+
 ```bash
+sudo apt-get update && sudo apt-get install -y git   # only thing needed to clone
 git clone <repo> ~/AgentSystem && cd ~/AgentSystem
-# base agent system:
-./install.sh
-# then the mission-control server (or pass --with-mission-control to install.sh):
-bash tools/mission-control/install-local.sh
+
+# One command: bootstraps prerequisites, installs the agent system, then Mission
+# Control with phone access, the CI runner, and the daily self-update timer.
+./install.sh --with-mission-control --with-tailscale --with-runner --with-auto-update
 ```
+
+`install.sh` detects missing `node`/`gh` and runs the Mission Control dependency
+bootstrap itself, then continues; any flag it doesn't recognise is forwarded to
+`tools/mission-control/install-local.sh`. Running that installer directly works
+too — it just skips the agent-system half (brains, agent sync, hooks, MCP server).
+
+Do not run either installer with `sudo` — both CLI installers refuse to install
+into root's home, and the service is meant to run as your deploy user.
 
 By default this installs a **system** service bound to **loopback (127.0.0.1)** —
 the safe default. Nothing is exposed to the network until you opt in.
@@ -68,10 +101,13 @@ non-issue — but both CLIs must be installed on this host.
 | Flag | Effect |
 |------|--------|
 | `--user` | Install as a `systemd --user` service (no sudo). Enables linger so it survives logout/reboot. |
+| `--no-clis` | Skip installing the `claude` / `agy` CLIs. OS packages, Node, and `gh` still install. |
 | `--lan` | Bind `0.0.0.0` and open the port in UFW. LAN-reachable. |
 | `--bind <addr>` | Bind a specific address (e.g. a Tailscale IP `100.x.y.z`). Preferred over `--lan`. |
 | `--port <n>` | Listen port (default 8765). |
 | `--public-url <url>` | Advertise this base URL in API responses (behind a proxy/Tailscale). |
+| `--with-tailscale` | Install Tailscale, join the tailnet, bind the tailnet IP, and open the port on `tailscale0` only. Best option for phone access. |
+| `--tailscale-authkey <k>` | Join non-interactively. Prefer `TS_AUTHKEY=tskey-… bash …` — a flag is visible in `ps`. |
 | `--no-service` | Set everything up but don't install/start systemd (run manually). |
 
 ---
@@ -84,13 +120,21 @@ ssh -L 8765:127.0.0.1:8765 user@server
 # then open http://localhost:8765/panel?key=$(ssh user@server cat .claude/remote-webhook.key)
 ```
 
-**B. Tailscale (recommended for phone access).** Install Tailscale on the server
-and phone, then bind the Tailscale IP:
+**B. Tailscale (recommended for phone access).** The installer does the whole
+thing — installs Tailscale, joins the tailnet, binds that IP, sets `PUBLIC_URL`,
+and opens the port on `tailscale0` only:
 ```bash
-bash tools/mission-control/install-local.sh --bind "$(tailscale ip -4)" \
-  --public-url "http://$(tailscale ip -4):8765"
+bash tools/mission-control/install-local.sh --with-tailscale
+# it prints a login URL to authorise the server; or join non-interactively with a
+# pre-auth key from https://login.tailscale.com/admin/settings/keys :
+TS_AUTHKEY=tskey-auth-… bash tools/mission-control/install-local.sh --with-tailscale
 ```
-Only devices on your tailnet can reach it. Add `tailscale serve` for HTTPS.
+Only devices on your tailnet can reach it — install the Tailscale app on the phone
+and open the `http://100.x.y.z:8765/panel?key=…` URL the installer prints. For
+HTTPS and a stable hostname instead of the raw IP: `sudo tailscale serve --bg 8765`.
+
+An explicit `--bind`/`--lan` wins over the tailnet IP, so the manual form still
+works if Tailscale is already up: `--bind "$(tailscale ip -4)"`.
 
 **C. Public + reverse proxy with TLS.** If it must face the internet, never expose
 the Node port directly — front it with nginx/Caddy doing TLS, and bind the app to
