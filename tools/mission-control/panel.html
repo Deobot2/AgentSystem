@@ -573,7 +573,7 @@
   <nav class="tabs" aria-label="Panels">
     <button class="tab-btn active" onclick="switchTab('dispatch')">🚀 Dispatch</button>
     <button class="tab-btn" onclick="switchTab('fleet'); loadSessions(); loadRuns();">📡 Fleet</button>
-    <button class="tab-btn" onclick="switchTab('pipelines'); loadPipelines();">⚙️ Pipelines</button>
+    <button class="tab-btn" onclick="switchTab('pipelines'); loadPipelines(); loadBranches();">⚙️ Pipelines</button>
     <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
     <button class="tab-btn" onclick="switchTab('scratchpads'); loadScratchpads();">📝 Tasks</button>
     <button class="tab-btn" onclick="switchTab('briefing'); loadBriefing();">📰 Briefing</button>
@@ -600,33 +600,37 @@
         </select>
       </div>
 
-      <!-- Claude Specific Fields -->
-      <div id="claude-fields">
-        <div class="form-group">
-          <label for="agent-select">Lead Agent Specialist</label>
-          <select id="agent-select">
-            <option value="jarvis">Jarvis — CEO (Orchestration & Business)</option>
-            <option value="friday" selected>Friday — CTO (Technical lead / Code / Arch)</option>
-            <option value="sam">Sam — CSO (Security & Audits)</option>
-            <option value="nat">Nat — CBO (Strategy & GTM)</option>
-            <option value="ultron">Ultron (Backend & APIs)</option>
-            <option value="pym">Pym (Database & Schemas)</option>
-            <option value="leo">Leo (DevOps & CI/CD)</option>
-            <option value="astra">Astra (Frontend & Components)</option>
-            <option value="wanda">Wanda (Design & UI/UX)</option>
-            <option value="threepio">Threepio (Docs & Release Notes)</option>
-          </select>
-        </div>
+      <!-- Agent roster — applies to BOTH harnesses. sync-agents.js installs the same
+           roster into Antigravity as the `agentsystem` plugin, so agy takes these
+           names via `agy --agent <name>`. This block used to be Claude-only, which is
+           why Antigravity dispatch showed no agents and always ran agy's default. -->
+      <div class="form-group">
+        <label for="agent-select">Lead Agent Specialist</label>
+        <select id="agent-select">
+          <option value="jarvis">Jarvis — CEO (Orchestration & Business)</option>
+          <option value="friday" selected>Friday — CTO (Technical lead / Code / Arch)</option>
+          <option value="sam">Sam — CSO (Security & Audits)</option>
+          <option value="nat">Nat — CBO (Strategy & GTM)</option>
+          <option value="ultron">Ultron (Backend & APIs)</option>
+          <option value="pym">Pym (Database & Schemas)</option>
+          <option value="leo">Leo (DevOps & CI/CD)</option>
+          <option value="astra">Astra (Frontend & Components)</option>
+          <option value="wanda">Wanda (Design & UI/UX)</option>
+          <option value="threepio">Threepio (Docs & Release Notes)</option>
+        </select>
       </div>
 
       <!-- Antigravity Specific Fields -->
       <div id="agy-fields" style="display: none;">
         <div class="form-group">
-          <label for="model-select">Lead Model</label>
+          <label for="model-select">Model Override</label>
           <select id="model-select">
-            <option value="gemini-3.1-pro-preview" selected>gemini-3.1-pro-preview (Jarvis/Sam)</option>
-            <option value="gemini-3-flash-preview">gemini-3-flash-preview (Friday/Nat)</option>
-            <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (Workers)</option>
+            <!-- Default empty: each agy plugin agent already declares its own model
+                 (MODELS.gemini in sync-agents.js). Always sending --model overrode it. -->
+            <option value="" selected>Auto — use the agent's own model</option>
+            <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (pro)</option>
+            <option value="gemini-3-flash-preview">gemini-3-flash-preview (flash)</option>
+            <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (lite)</option>
           </select>
         </div>
       </div>
@@ -701,6 +705,26 @@
       <h2>🔀 Open Pull Requests</h2>
       <div class="runs-list" id="pr-list">
         <div class="loading">Loading pull requests...</div>
+      </div>
+    </section>
+
+    <!-- Diff viewer — review an agent's changes before flipping or merging its PR -->
+    <section class="glass-card" id="pr-diff-viewer" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;">
+        <h2 id="pr-diff-title" style="margin-bottom:0; text-transform:none; letter-spacing:0;">Diff</h2>
+        <button class="btn-action" onclick="document.getElementById('pr-diff-viewer').style.display='none'">Close</button>
+      </div>
+      <pre id="pr-diff-body" class="terminal-box" style="max-height: 420px;"></pre>
+    </section>
+
+    <!-- Branches + worktrees: is the repo back to a clean main-only state or not? -->
+    <section class="glass-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;">
+        <h2 style="margin-bottom:0;">🌿 Branches &amp; Worktrees</h2>
+        <button class="btn-action" onclick="loadBranches()">Refresh</button>
+      </div>
+      <div class="runs-list" id="branches-list">
+        <div class="loading">Loading branches...</div>
       </div>
     </section>
   </div>
@@ -826,6 +850,7 @@
   <div id="panel-briefing" class="panel-content">
     <section class="glass-card">
       <h2 id="briefing-title">📰 Daily Briefing</h2>
+      <button id="briefing-run-btn" onclick="runBriefing()">▶ Run briefing now</button>
       <pre id="briefing-body" class="terminal-box" style="max-height: 70vh;">
         <div class="loading">Loading briefing...</div>
       </pre>
@@ -864,7 +889,15 @@
     }
 
     function escapeHtml(s) {
-      return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // Session/agent names come from `claude agents --json`, not from this file, and they get
+    // interpolated into onclick="fn('...')" — a quote or newline in one would otherwise end the
+    // JS string and run whatever followed. JSON.stringify quotes and escapes the value, then
+    // escapeHtml protects the attribute; the parser decodes the entity before JS sees it.
+    function jsArg(s) {
+      return escapeHtml(JSON.stringify(String(s == null ? '' : s)));
     }
 
     // ── PWA service worker (makes the panel installable) ──
@@ -942,7 +975,7 @@
       document.getElementById('recent-chips').innerHTML = list.map((e, i) => {
         const p = e.prompt || '';
         const short = p.length > 34 ? p.slice(0, 34) + '…' : p;
-        const tag = e.harness === 'agy' ? 'AGY' : (e.agent || '?').toUpperCase();
+        const tag = (e.harness === 'agy' ? 'AGY:' : '') + (e.agent || '?').toUpperCase();
         return `<button type="button" class="chip recent" title="${escapeHtml(p)}" onclick="applyRecent(${i})">↻ ${escapeHtml(tag)}: ${escapeHtml(short)}</button>`;
       }).join('');
     }
@@ -1021,9 +1054,69 @@
             <div class="run-meta">${escapeHtml(p.branch || '')}</div>
             <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${badges.join('')}</div>
           </div>
-          <a class="btn-action" href="${escapeHtml(p.url)}" target="_blank" rel="noopener">Open ↗</a>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:flex-start;">
+            <button class="btn-action" onclick="viewDiff(${p.number})">Diff</button>
+            ${p.draft ? `<button class="btn-action" onclick="prAction(${p.number}, 'ready')">Ready</button>` : ''}
+            <button class="btn-action" onclick="prAction(${p.number}, 'merge')">Merge</button>
+            <a class="btn-action" href="${escapeHtml(p.url)}" target="_blank" rel="noopener">Open ↗</a>
+          </div>
         </div>`;
       }).join('');
+    }
+
+    async function viewDiff(number) {
+      const viewer = document.getElementById('pr-diff-viewer');
+      const body = document.getElementById('pr-diff-body');
+      document.getElementById('pr-diff-title').textContent = 'Diff: PR #' + number;
+      viewer.style.display = 'block';
+      body.textContent = 'Loading diff...';
+      try {
+        const d = await api('/diff?pr=' + number);
+        body.textContent = (d.diff || '(empty diff)')
+          + (d.truncated ? '\n\n--- truncated at 200000 chars (' + d.bytes + ' total) ---' : '');
+      } catch (e) {
+        body.textContent = 'Failed to load diff: ' + e.message;
+      }
+      viewer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Merging is irreversible from the panel's point of view, so it asks first.
+    // Branch protection still requires the tests and Sam's audit — /pr never passes --admin.
+    async function prAction(number, action) {
+      if (action === 'merge' && !confirm(`Squash-merge PR #${number} into main and delete its branch?`)) return;
+      if (action === 'ready' && !confirm(`Mark PR #${number} ready for review? This fires the required checks.`)) return;
+      try {
+        await api('/pr', { method: 'POST', body: JSON.stringify({ number, action }) });
+        loadPipelines();
+      } catch (e) {
+        alert(`PR #${number} ${action} failed: ${e.message}`);
+      }
+    }
+
+    async function loadBranches() {
+      const el = document.getElementById('branches-list');
+      el.innerHTML = '<div class="loading">Loading branches...</div>';
+      try {
+        const d = await api('/branches');
+        const wtByBranch = {};
+        (d.worktrees || []).forEach(w => { if (w.branch) wtByBranch[w.branch] = w.path; });
+        const head = `<div class="run-item">
+          <div>
+            <div class="run-name">${escapeHtml(d.repo)} @ ${escapeHtml(d.current)}</div>
+            <div class="run-meta">${escapeHtml(d.path)}</div>
+          </div>
+          <span class="status-badge ${d.dirty ? 'pending' : 'passing'}">${d.dirty ? d.dirty + ' dirty' : 'clean'}</span>
+        </div>`;
+        el.innerHTML = head + (d.branches || []).map(b => `<div class="run-item">
+          <div>
+            <div class="run-name">${escapeHtml(b.name)}</div>
+            <div class="run-meta">${escapeHtml(b.age || '')}${b.upstream ? ' · tracks ' + escapeHtml(b.upstream) : ' · no upstream'}${wtByBranch[b.name] ? ' · worktree ' + escapeHtml(wtByBranch[b.name]) : ''}</div>
+          </div>
+          ${wtByBranch[b.name] ? '<span class="status-badge draft">worktree</span>' : ''}
+        </div>`).join('');
+      } catch (e) {
+        el.innerHTML = '<div class="error">Failed to load branches: ' + escapeHtml(e.message) + '</div>';
+      }
     }
 
     function setHarness(h) {
@@ -1031,13 +1124,8 @@
       document.querySelectorAll('.harness-btn').forEach(b => b.classList.remove('active'));
       document.querySelector(`.harness-btn[data-val="${h}"]`).classList.add('active');
 
-      if (h === 'claude') {
-        document.getElementById('claude-fields').style.display = 'block';
-        document.getElementById('agy-fields').style.display = 'none';
-      } else {
-        document.getElementById('claude-fields').style.display = 'none';
-        document.getElementById('agy-fields').style.display = 'block';
-      }
+      // Agent picker is shared; only the agy model override is harness-specific.
+      document.getElementById('agy-fields').style.display = h === 'agy' ? 'block' : 'none';
     }
 
     function toggleFactTarget() {
@@ -1100,6 +1188,13 @@
       }
     }
 
+    // Both harnesses carry an agent now, so label them the same way. Antigravity rows
+    // used to be a bare "Antigravity" with the agent dropped on the server side.
+    function sessionLabel(s) {
+      const harness = s.harness === 'agy' ? 'Antigravity' : 'Claude';
+      return harness + ': ' + (s.agent || 'default').toUpperCase();
+    }
+
     async function loadSessions() {
       const container = document.getElementById('sessions-list');
       try {
@@ -1109,7 +1204,7 @@
 
         // Detect sessions that finished since the last poll → notify.
         const curMap = {};
-        active.forEach(s => { curMap[s.id] = s.harness === 'agy' ? 'Antigravity' : 'Claude: ' + (s.agent || 'Agent').toUpperCase(); });
+        active.forEach(s => { curMap[s.id] = sessionLabel(s); });
         Object.keys(prevSessionMap).forEach(id => {
           if (!(id in curMap)) notify('Session finished', prevSessionMap[id] + ' completed');
         });
@@ -1121,29 +1216,47 @@
         }
 
         container.innerHTML = data.sessions.map(s => {
-          const isAgy = s.harness === 'agy';
-          const name = isAgy ? 'Antigravity' : 'Claude: ' + (s.agent || 'Agent').toUpperCase();
+          const name = sessionLabel(s);
           const running = s.status === 'running' || s.status === 'spawning';
+          // `claude agents --json` reports state:"blocked" when a session asked a question
+          // and is waiting. Only claude sessions carry the full sessionId that /reply needs.
+          const blocked = s.state === 'blocked';
           return `
             <div class="session-item">
               <div>
                 <div class="session-name">
-                  ${name}
-                  <span class="status-badge ${s.status}">${s.status}</span>
+                  ${escapeHtml(name)}
+                  <span class="status-badge ${escapeHtml(s.status)}">${escapeHtml(s.status)}</span>
+                  ${blocked ? '<span class="status-badge pending">waiting on you</span>' : ''}
                 </div>
                 <div class="session-meta">
-                  Repo: ${(s.repo || 'unknown').toUpperCase()} | ID: ${s.id}
+                  Repo: ${escapeHtml(String(s.repo || 'unknown').toUpperCase())} | ID: ${escapeHtml(s.id)}
                 </div>
               </div>
               <div style="display:flex; gap:6px;">
-                <button class="btn-action" onclick="viewLogStream('${s.id}', '${name}')">Logs</button>
-                ${running ? `<button class="btn-action btn-stop" onclick="stopSession('${s.id}')">Stop</button>` : ''}
+                ${s.sessionId ? `<button class="btn-action" onclick="replySession(${jsArg(s.sessionId)}, ${jsArg(name)})">Reply</button>` : ''}
+                <button class="btn-action" onclick="viewLogStream(${jsArg(s.id)}, ${jsArg(name)})">Logs</button>
+                ${running ? `<button class="btn-action btn-stop" onclick="stopSession(${jsArg(s.id)})">Stop</button>` : ''}
               </div>
             </div>
           `;
         }).join('');
       } catch (e) {
         container.innerHTML = '<div class="error">Failed to load sessions: ' + e.message + '</div>';
+      }
+    }
+
+    // Answer a session that asked a question. Before this, a session in state "blocked"
+    // could only be unblocked from a terminal on the host.
+    async function replySession(sessionId, name) {
+      const message = prompt(`Reply to ${name}:`);
+      if (!message || !message.trim()) return;
+      try {
+        const d = await api('/reply', { method: 'POST', body: JSON.stringify({ sessionId, message }) });
+        alert('Sent. Following as ' + d.backgroundId + '.');
+        loadSessions();
+      } catch (e) {
+        alert('Reply failed: ' + e.message);
       }
     }
 
@@ -1164,7 +1277,7 @@
                 <div class="run-name">👤 ${r.agent.toUpperCase()}</div>
                 <div class="run-meta">Started at ${date} | ID: ${r.id}</div>
               </div>
-              <button class="btn-action" onclick="viewLogStream('${r.id}', '${r.agent}')">Read Logs</button>
+              <button class="btn-action" onclick="viewLogStream(${jsArg(r.id)}, ${jsArg(r.agent)})">Read Logs</button>
             </div>
           `;
         }).join('');
@@ -1190,8 +1303,8 @@
         harness: currentHarness,
         repo,
         prompt,
-        agent: currentHarness === 'claude' ? agent : null,
-        model: currentHarness === 'agy' ? model : null,
+        agent,
+        model: currentHarness === 'agy' ? (model || null) : null,
       };
 
       try {
@@ -1203,8 +1316,8 @@
         pushRecent({
           harness: currentHarness,
           repo,
-          agent: currentHarness === 'claude' ? agent : null,
-          model: currentHarness === 'agy' ? model : null,
+          agent,
+          model: currentHarness === 'agy' ? (model || null) : null,
           prompt,
         });
         document.getElementById('prompt-input').value = '';
@@ -1284,7 +1397,7 @@
           return;
         }
         container.innerHTML = data.scratchpads.map(s => `
-          <div class="repo-item" onclick="viewScratchpad('${s.project}', '${s.issue}')">
+          <div class="repo-item" onclick="viewScratchpad(${jsArg(s.project)}, ${jsArg(s.issue)})">
             <div>
               <div class="repo-name">🔧 ${s.project} / Issue #${s.issue}</div>
               <div class="repo-path" style="font-size:11px;">${s.path.split('/').pop()}</div>
@@ -1406,9 +1519,9 @@
         }
 
         resultsDiv.innerHTML = data.results.map(r => `
-          <div class="repo-item" onclick="loadMemoryFile('${r.path.replace(/\\\\/g, "/")}')">
+          <div class="repo-item" onclick="loadMemoryFile(${jsArg(String(r.path).replace(/\\\\/g, '/'))})">
             <div>
-              <div class="repo-name">🧠 ${r.file}</div>
+              <div class="repo-name">🧠 ${escapeHtml(r.file)}</div>
               <div class="repo-path" style="font-size:11px; word-break:break-all;">Path: ${r.path}</div>
             </div>
             <div style="text-align:right;">
@@ -1454,6 +1567,41 @@
         body.textContent = data.markdown || 'Briefing is empty.';
       } catch (e) {
         body.innerHTML = '<div class="error">' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    // Dispatch the Life OS daily-briefing skill on demand (the 6am UTC cron in
+    // scheduled-tasks.yml runs the same thing). The digest lands in $LIFE_REPO/briefings, which is
+    // what loadBriefing() reads — so the tab only updates once the agent finishes, not on click.
+    async function runBriefing() {
+      const btn = document.getElementById('briefing-run-btn');
+      btn.disabled = true;
+      btn.textContent = 'Dispatching…';
+      try {
+        const data = await api('/run', {
+          method: 'POST',
+          body: JSON.stringify({
+            harness: 'claude',
+            repo: 'agentsystem',
+            agent: 'threepio',
+            // Overrides threepio's haiku default — a full mail sweep plus two Notion
+            // databases regularly exceeds haiku's 200K window.
+            model: 'claude-sonnet-5',
+            // The cron pipes the agent's stdout into the digest file; a --bg spawn has no pipe, so
+            // this path asks the agent to write it. Same filename GET /briefing serves.
+            prompt: 'Read ~/dev/AgentSystem/skills/daily-briefing/SKILL.md and execute it now. '
+              + 'Then write the digest with the Write tool to '
+              + '${LIFE_REPO:-$HOME/life}/briefings/<today as YYYY-MM-DD>.md, creating the '
+              + 'directory if needed, so the Mission Control Briefing tab can render it.',
+          })
+        });
+        alert('Briefing dispatched. Session ID: ' + data.id + '\nRefresh this tab once it finishes.');
+        loadSessions();
+      } catch (e) {
+        alert('Briefing dispatch failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '▶ Run briefing now';
       }
     }
 

@@ -51,7 +51,10 @@ function copySkill(name) {
 // installing all of them is a real per-session cost for skills that fire once a month.
 // CORE = high value and frequently triggered. The rest stay in the repo and are installed
 // on demand: `node tools/install-skills.js standup stale-sweep`, or `--all`.
-const CORE = ['verify-claim', 'replicate-bug', 'pr-ready', 'postmortem', 'refute'];
+// daily-briefing is CORE because it fires every day (scheduled-tasks.yml) and the user triggers
+// it by name. It is one of the gitignored private life-OS skills (.gitignore #187), so it exists
+// only on this machine — the CORE.filter below silently drops it anywhere the dir is absent.
+const CORE = ['verify-claim', 'replicate-bug', 'pr-ready', 'postmortem', 'refute', 'daily-briefing'];
 
 function main() {
   const args = process.argv.slice(2);

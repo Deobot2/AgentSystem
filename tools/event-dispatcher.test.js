@@ -75,6 +75,13 @@ test('spawnAgentHandler: rejects agent names outside the roster shape', () => {
   assert.throws(() => spawnAgentHandler({ agent: 'friday && whoami', prompt: 'x' }), /invalid agent name/);
 });
 
+test('spawnAgentHandler: rejects model overrides outside the model-id shape', () => {
+  assert.throws(
+    () => spawnAgentHandler({ agent: 'threepio', prompt: 'x', model: 'claude-sonnet-5; whoami' }),
+    /invalid model/,
+  );
+});
+
 test('cmdQuote: neutralizes quotes and newlines so payload cannot break out of cmd', () => {
   assert.equal(cmdQuote('plain prompt'), '"plain prompt"');
   assert.equal(cmdQuote('say "hi" & del *'), '"say ""hi"" & del *"');

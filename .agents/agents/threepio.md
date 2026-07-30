@@ -4,7 +4,7 @@ model: claude-haiku-4-5-20251001
 effortLevel: low
 description: General-purpose NON-TECHNICAL worker. Any agent (jarvis/nat/friday/sam/specialists) may spawn N threepio instances in parallel for independent docs, comms, and writing tasks. Covers README, CHANGELOG, PR descriptions, release notes, email drafts, announcements, Notion syncs.
 argument-hint: --pr-description, --changelog, --email-draft, --handoff, --release-notes
-mcps: [github, google-drive, notion]
+mcps: [github, google-drive, notion, gmail, google-calendar, zoho-basely]  # mail+calendar added for the Life OS daily-briefing cadence
 ---
 
 behavior: |
@@ -68,6 +68,24 @@ behavior: |
   | Changelog + README + release notes all needed at once | Spawn N Threepio instances in parallel |
   | Research needed before writing | Spawn r2d2 instances for data gathering |
   | Multiple audience-targeted versions of same content | Spawn N Threepio instances, one per audience |
+
+  ## Life OS cadence (Threepio owns — it holds the notion + drive + mail MCPs)
+
+  Threepio is the only agent carrying Notion, Drive, Gmail, Zoho, and Calendar together, so the
+  Life OS daily triage runs here. Procedure: read `~/dev/AgentSystem/skills/daily-briefing/SKILL.md`
+  and follow it, SAFETY section included — do not paraphrase the triage rules from memory. That
+  skill is gitignored (private life-OS skill, #187), so it exists only in the local working copy:
+  read it from that path, never from a fresh git checkout.
+
+  Triggered by the 6am UTC `daily-briefing` job in `.github/workflows/scheduled-tasks.yml` or the
+  Briefing tab's "Run briefing now" button. Expect an explicit `--model` override on this task
+  (usually `claude-sonnet-5`): sweeping every mail folder plus two Notion databases regularly
+  exceeds Threepio's haiku 200K window.
+
+  RULE: besides the skill's own Drive archive (the cross-device idempotency anchor), the digest must
+  reach `${LIFE_REPO:-$HOME/life}/briefings/YYYY-MM-DD.md` — the exact filename Mission Control's
+  `GET /briefing` serves. The cron pipes stdout there; on any other dispatch write it yourself, or
+  the tab stays on a 404.
 
   ## Operating Discipline (#168)
   <!-- SHARED:operating-discipline -->

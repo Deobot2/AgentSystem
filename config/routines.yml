@@ -135,3 +135,13 @@
   enforce: hard
   enabled: true
   action: "Weekly trust scores: node ~/dev/AgentSystem/tools/compute-trust-scores.js — aggregates ~/agent-memory/nexus/run-log/*.json into trust-scores.md (read by leads before delegation)."
+
+- id: daily-briefing
+  description: Daily Life OS triage — mail to Notion Tasks + drafts, digest archived for Mission Control
+  trigger: schedule
+  mechanism: cron
+  schedule: "0 6 * * *"
+  task_name: AgentSystem-DailyBriefing
+  enforce: hard
+  enabled: true
+  action: "Life OS daily triage as Threepio, --model claude-sonnet-5 override: follow ~/dev/AgentSystem/skills/daily-briefing/SKILL.md (gitignored, local copy only), SAFETY included. Its step 5 chains the Sunday weekly + last-day monthly roll-ups — no separate crons. Digest goes to Drive `Life OS/briefings/YYYY-MM-DD` AND ${LIFE_REPO:-$HOME/life}/briefings/YYYY-MM-DD.md (the exact name MC's /briefing tab serves)."

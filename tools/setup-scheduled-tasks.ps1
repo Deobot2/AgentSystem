@@ -156,7 +156,7 @@ if ($claudeCmd) {
     $reviewPrompt = 'Weekly agent fleet review: review routing-log.jsonl misroutes, session costs (node ~/dev/AgentSystem/tools/session-cost.js --week), open blockers, and goal scorecard. Log outcome via decision-log.js.'
     $action4 = New-ScheduledTaskAction `
         -Execute 'cmd.exe' `
-        -Argument "/c `"`"$($claudeCmd.Source)`" --bg --agent jarvis -p `"$reviewPrompt`" >> `"$reviewLog`" 2>&1`"" `
+        -Argument "/c `"`"$($claudeCmd.Source)`" --bg --agent jarvis `"$reviewPrompt`" >> `"$reviewLog`" 2>&1`"" `
         -WorkingDirectory (Split-Path $ToolsRoot -Parent)
     $trigger4 = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At '09:00'
     $settings4 = New-ScheduledTaskSettingsSet `

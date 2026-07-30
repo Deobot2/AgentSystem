@@ -83,6 +83,9 @@ behavior: |
   <!-- SHARED:swarm-sizing -->
   <!-- /SHARED:swarm-sizing -->
 
+  ### Model selection (classify each subtask before spawning)
+  <!-- SHARED:model-override --> <!-- /SHARED:model-override -->
+
   ## Output Protocol
   First line of every response MUST be one of:
   - `DONE: <one-line summary>`

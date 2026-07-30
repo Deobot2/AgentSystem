@@ -104,8 +104,12 @@ instead. `/favicon.ico`, `/icon.svg`, and `/sw.js` are unauthenticated (no secre
 | GET | `/memory/search?agent=&query=` | Scored memory-file search. |
 | GET | `/memory/file?path=` | Read a file. Confined to `~/agent-memory`. |
 | POST | `/memory/remember` | Save a durable fact. Body: `{fact, section?, tier?, target?}`. |
+| GET | `/diff?pr=` | Unified diff for a PR (truncated at 200 000 chars). |
+| GET | `/branches?repo=` | Branches, worktrees, dirty-file count for an allowlisted repo. |
 | POST | `/run` | Spawn a session (see below). |
 | POST | `/stop` | Stop a session. Body: `{id}`. |
+| POST | `/reply` | Answer a session waiting on input. Body: `{sessionId, message}`. |
+| POST | `/pr` | Act on a PR. Body: `{number, action: ready\|merge\|comment, body?}`. |
 | POST | `/github` | GitHub webhook receiver (HMAC-authenticated). |
 
 ### POST /run
@@ -122,6 +126,24 @@ through the same registry, so it obeys the same concurrency cap.
 
 Returns `202` with `{id, harness, repo, status, logUrl}`. Returns `409` if that
 harness already has a running session — the cap is 1 per harness.
+
+### POST /reply
+
+`claude agents --json` reports `state: "blocked"` for a background session that asked a
+question and is waiting. `/reply` resumes that conversation with the answer:
+
+```json
+{ "sessionId": "<full session UUID from /sessions>", "message": "yes, use the squash merge" }
+```
+
+There is no CLI verb that messages a live background session, so this shells out to
+`claude --resume <id> --bg <message>` and returns the new `backgroundId` to follow.
+
+### POST /pr
+
+`ready` flips a draft (which is what fires the required checks — Sam's security audit
+skips drafts), `merge` squash-merges and deletes the branch, `comment` posts a comment.
+`merge` never passes `--admin`, so branch protection on `main` still holds.
 
 ## Security
 

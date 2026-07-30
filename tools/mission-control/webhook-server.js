@@ -15,6 +15,11 @@
  *   GET  /log/:id       — tail agent run log (last 100 lines)
  *   POST /run           — spawn background agent
  *                         body: { agent, prompt, cwd? }
+ *   POST /reply         — answer a session waiting on input
+ *                         body: { sessionId, message }
+ *   POST /pr            — act on a PR: body { number, action: ready|merge|comment, body? }
+ *   GET  /diff?pr=      — unified diff for a PR
+ *   GET  /branches?repo= — branches + worktrees for an allowlisted repo
  *   POST /github        — GitHub webhook → auto-route to agent
  */
 
@@ -27,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionRegistry } from './session-registry.js';
 import { validateRepo } from './repo-validator.js';
+import { claudeBgArgs } from './claude-args.js';
 import { spawnAgyPersistent } from './agy-dispatcher.js';
 import { ipAllowed as ipAllowedFor, normalizeIp } from './ip-utils.js';
 import { lanAddresses, publicBaseUrl } from './url-utils.js';
@@ -158,6 +164,11 @@ mkdirSync(LOG_DIR, { recursive: true });
 // Initialize Mission Control registry (for both claude + agy sessions)
 const registry = new SessionRegistry(MC_REGISTRY_FILE);
 
+// Agent roster — valid for BOTH harnesses. tools/sync-agents.js deploys the same
+// .agents/agents/*.md set to ~/.claude/agents (Claude) and to the `agentsystem` agy
+// plugin (Antigravity), so `--agent <name>` accepts these names on either side.
+const VALID_AGENTS = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
+
 // Reconcile any stale active sessions on server startup
 function reconcileRegistryOnStartup() {
   try {
@@ -173,6 +184,21 @@ function reconcileRegistryOnStartup() {
   }
 }
 reconcileRegistryOnStartup();
+
+// Nothing tells the registry when an agy process ends — only the startup reconcile did,
+// so one finished agy session stayed status=running for the life of the server and the
+// per-harness concurrency cap 409'd every later Antigravity dispatch. Poll liveness by
+// pid instead (signal 0 = existence check, no signal delivered).
+function reapDeadAgySessions() {
+  for (const s of registry.getRunning()) {
+    if (s.harness !== 'agy' || !s.pid) continue;
+    try {
+      process.kill(s.pid, 0);
+    } catch {
+      registry.exitSession(s.id, 0);
+    }
+  }
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -288,13 +314,17 @@ function pruneRecentSpawnKeys(now) {
   }
 }
 
-function spawnAgent(agent, prompt, cwd = HOME) {
+// `model` is an optional per-task override of the agent's default from MODELS.claude in
+// tools/sync-agents.js — a full model id (e.g. claude-sonnet-5), which is what the CLI takes
+// (the in-session Agent tool takes aliases instead). Null means "use the agent's default".
+function spawnAgent(agent, prompt, cwd = HOME, model = null) {
   return new Promise(async (resolve) => {
     const now = Date.now();
     pruneRecentSpawnKeys(now);
 
-    // 1. Debounce/dedup: skip identical agent+cwd spawns within the window.
-    const dedupeKey = `${agent}|${cwd}`;
+    // 1. Debounce/dedup: skip identical agent+cwd+model spawns within the window. Model is part
+    // of the key so re-running the same task at a different tier is not swallowed as a duplicate.
+    const dedupeKey = `${agent}|${cwd}|${model || 'default'}`;
     const lastSpawn = recentSpawnKeys.get(dedupeKey);
     if (lastSpawn && (now - lastSpawn) < SPAWN_DEDUPE_WINDOW_MS) {
       console.log(`[spawn-guard] Skipped duplicate spawn for agent=${agent} cwd=${cwd} (last spawned ${now - lastSpawn}ms ago, window=${SPAWN_DEDUPE_WINDOW_MS}ms)`);
@@ -319,7 +349,7 @@ function spawnAgent(agent, prompt, cwd = HOME) {
         const evt = publishEvent({
           type: 'spawn-agent',
           source: 'webhook-server:concurrency_cap',
-          payload: { agent, prompt, cwd },
+          payload: { agent, prompt, cwd, model },
         });
         queuedId = evt.id;
         console.log(`[spawn-guard] Queued spawn on event bus id=${evt.id}`);
@@ -337,7 +367,8 @@ function spawnAgent(agent, prompt, cwd = HOME) {
 
     // Use --bg for proper daemon-managed background sessions
     // stdout: "backgrounded · <8-char-id>"
-    const child = spawn(CLAUDE, ['--bg', '--agent', agent, '-p', prompt], {
+    const bgArgs = claudeBgArgs({ agent, prompt, model });
+    const child = spawn(CLAUDE, bgArgs, {
       cwd: existsSync(cwd) ? cwd : HOME,
       env: { ...process.env, HOME },
       windowsHide: true,
@@ -366,7 +397,7 @@ function spawnAgent(agent, prompt, cwd = HOME) {
     // Fallback: if spawn fails, log to file
     child.on('error', () => {
       const logFd = openSync(logFile, 'w');
-      const fallback = spawn(CLAUDE, ['--agent', agent, '-p', prompt], {
+      const fallback = spawn(CLAUDE, ['--agent', agent, ...(model ? ['--model', model] : []), '-p', prompt], {
         cwd: existsSync(cwd) ? cwd : HOME,
         detached: true,
         windowsHide: true,
@@ -393,10 +424,11 @@ function spawnAgent(agent, prompt, cwd = HOME) {
  * @param {string} agent - Agent name
  * @param {string} prompt - Task prompt
  * @param {string} repoPath - Working directory
+ * @param {string|null} model - Optional per-task model override (full id, e.g. claude-sonnet-5)
  * @returns {Promise<{sessionId, logPath, logFile, pid}>}
  */
-async function dispatchClaude(agent, prompt, repoPath) {
-  return spawnAgent(agent, prompt, repoPath);
+async function dispatchClaude(agent, prompt, repoPath, model = null) {
+  return spawnAgent(agent, prompt, repoPath, model);
 }
 
 // The claude CLI cold-starts in ~13s on this box. Every shell-out needs a hard
@@ -533,6 +565,23 @@ function runGh(args, timeoutMs = 8000) {
     child.on('error', e => { clearTimeout(t); resolve({ ok: false, error: e.message }); });
   });
 }
+
+function runGit(args, cwd, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let out = '', err = '';
+    const child = spawn('git', args, { cwd, env: { ...process.env, HOME } });
+    const t = setTimeout(() => { child.kill(); resolve({ ok: false, error: 'git timed out' }); }, timeoutMs);
+    child.stdout?.on('data', d => out += d);
+    child.stderr?.on('data', d => err += d);
+    child.on('close', code => { clearTimeout(t); code === 0 ? resolve({ ok: true, out }) : resolve({ ok: false, error: (err.trim() || `git exited ${code}`) }); });
+    child.on('error', e => { clearTimeout(t); resolve({ ok: false, error: e.message }); });
+  });
+}
+
+// Free-text bodies (session replies, PR comments) reach a CLI argv slot, so they get a
+// ceiling — and a diff can be megabytes, which no panel needs to render.
+const MAX_REPLY_CHARS = 10_000;
+const MAX_DIFF_CHARS = 200_000;
 
 function rollupState(rollup) {
   if (!Array.isArray(rollup) || rollup.length === 0) return 'none';
@@ -751,6 +800,7 @@ async function handleRequest(req, res) {
 
   // GET /sessions — live from claude agents --json + agy sessions from registry
   if (req.method === 'GET' && pathname === '/sessions') {
+    reapDeadAgySessions();
     const claudeSessions = await getActiveSessions();
     const roster = getSessions(); // from roster.json as fallback
     const sessions = claudeSessions.length ? claudeSessions : roster;
@@ -847,6 +897,12 @@ async function handleRequest(req, res) {
         return json(res, 400, { error: `Unknown harness "${harness}". Valid: claude, agy` });
       }
 
+      // model reaches a spawn arg list here and (on a concurrency-cap requeue) a win32 shell
+      // string in event-dispatcher.js, so it is shape-checked at the boundary, not downstream.
+      if (model !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(String(model))) {
+        return json(res, 400, { error: `Invalid model id: ${model}` });
+      }
+
       // Validate repo against allowlist
       const knownRepos = loadKnownRepos();
       let repoPath;
@@ -859,6 +915,7 @@ async function handleRequest(req, res) {
 
       // CONCURRENCY CAP: Enforce max 1 concurrent session per harness (CEO requirement)
       // See https://github.com/Zene8/AgentSystem/issues/95 — autonomy constraints
+      reapDeadAgySessions();
       const running = registry.getRunning().filter(s => s.harness === harness);
       if (running.length > 0) {
         return json(res, 409, {
@@ -868,32 +925,35 @@ async function handleRequest(req, res) {
         });
       }
 
+      // The roster is synced to BOTH harnesses by tools/sync-agents.js (agy gets it as
+      // the `agentsystem` plugin), so the same names are valid for agy via `agy --agent`.
+      if (agent && !VALID_AGENTS.includes(agent.toLowerCase())) {
+        return json(res, 400, { error: `Unknown agent: ${agent}` });
+      }
+      if (harness === 'claude' && !agent) {
+        return json(res, 400, { error: 'agent required for claude harness' });
+      }
+
       // Create session registry entry
       const sessionRecord = registry.createSession({
         harness,
         repo,
         prompt,
-        agent: harness === 'claude' ? agent : null,
-        model: harness === 'agy' ? model : null,
+        agent: agent ? agent.toLowerCase() : null,
+        // Recorded for both harnesses — the claude harness honors it too now (--model), so the
+        // panel must be able to show which tier a session actually ran at.
+        model,
       });
 
       try {
         let dispatchResult;
         if (harness === 'claude') {
-          // Dispatch claude agent
-          if (!agent) {
-            registry.exitSession(sessionRecord.id, 1);
-            return json(res, 400, { error: 'agent required for claude harness' });
-          }
-          const validAgents = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
-          if (!validAgents.includes(agent.toLowerCase())) {
-            registry.exitSession(sessionRecord.id, 1);
-            return json(res, 400, { error: `Unknown agent: ${agent}` });
-          }
-          dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath);
+          // agent presence + roster membership are already validated above, before the
+          // registry entry exists — no need to create a session just to fail it.
+          dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath, model);
         } else {
-          // Dispatch agy
-          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model);
+          // Dispatch agy — agent is optional; omitted means agy's default agent.
+          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model, agent ? agent.toLowerCase() : null);
         }
 
         // Update registry with dispatch result
@@ -937,9 +997,8 @@ async function handleRequest(req, res) {
       const { agent = 'jarvis', prompt, cwd = HOME } = parsed;
       if (!prompt) return json(res, 400, { error: 'prompt required' });
 
-      const validAgents = ['jarvis','friday','sam','nat','ultron','pym','leo','astra','wanda','threepio','r2d2'];
-      if (!validAgents.includes(agent.toLowerCase())) {
-        return json(res, 400, { error: `Unknown agent. Valid: ${validAgents.join(', ')}` });
+      if (!VALID_AGENTS.includes(agent.toLowerCase())) {
+        return json(res, 400, { error: `Unknown agent. Valid: ${VALID_AGENTS.join(', ')}` });
       }
 
       const running = registry.getRunning().filter(s => s.harness === 'claude');
@@ -1044,6 +1103,137 @@ async function handleRequest(req, res) {
       return json(res, 500, { error: `Failed to stop session: ${e.message}` });
     }
     return;
+  }
+
+  // POST /reply — answer a background session that is waiting on a human.
+  //
+  // `claude agents --json` already reports state:"blocked" for a session that asked a
+  // question, but Mission Control had no way to answer one, so a blocked session sat
+  // there until somebody opened a terminal on the host. There is no CLI verb that
+  // messages a live background session; resuming it with a new prompt is the
+  // scriptable equivalent and lands in the same conversation.
+  if (req.method === 'POST' && pathname === '/reply') {
+    const { parsed } = await readBody(req);
+    const sessionId = String(parsed.sessionId || '');
+    const message = String(parsed.message || '');
+
+    // The session id reaches an argv slot, and a loose value would also let a caller
+    // resume any conversation on the box — so it is pinned to the UUID shape the CLI mints.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+      return json(res, 400, { error: 'sessionId must be a full session UUID (from /sessions)' });
+    }
+    if (!message.trim()) return json(res, 400, { error: 'message required' });
+    if (message.length > MAX_REPLY_CHARS) {
+      return json(res, 400, { error: `message too long (max ${MAX_REPLY_CHARS} chars)` });
+    }
+
+    auditLog('reply_session', req, { sessionId, chars: message.length });
+
+    const { out, err } = await runClaude(claudeBgArgs({ resumeId: sessionId, prompt: message }));
+    const combined = out + err;
+    const m = combined.match(/backgrounded\s*[·•]\s*([a-f0-9]+)/i);
+    if (!m) {
+      return json(res, 502, {
+        error: 'claude did not background the resumed session',
+        detail: combined.trim().slice(0, 500),
+      });
+    }
+    // Resuming mints a new background id; the caller needs it to follow the reply.
+    return json(res, 200, { status: 'replied', sessionId, backgroundId: m[1] });
+  }
+
+  // POST /pr — act on a pull request. /pipelines could only show PRs, so the last
+  // step of every task still needed a laptop: flip the draft so the required audit
+  // fires, then merge once it is green.
+  if (req.method === 'POST' && pathname === '/pr') {
+    const { parsed } = await readBody(req);
+    const number = Number(parsed.number);
+    const action = String(parsed.action || '');
+
+    if (!Number.isInteger(number) || number < 1) {
+      return json(res, 400, { error: 'number required (PR number)' });
+    }
+    if (!['ready', 'merge', 'comment'].includes(action)) {
+      return json(res, 400, { error: `Unknown action "${action}". Valid: ready, merge, comment` });
+    }
+
+    auditLog('pr_action', req, { number, action });
+
+    let args;
+    if (action === 'ready') {
+      args = ['pr', 'ready', String(number), '--repo', GH_REPO];
+    } else if (action === 'merge') {
+      // No --admin: branch protection on main requires the tests and the security audit,
+      // and a merge button that could skip them would defeat the point of the gate.
+      args = ['pr', 'merge', String(number), '--repo', GH_REPO, '--squash', '--delete-branch'];
+    } else {
+      const body = String(parsed.body || '');
+      if (!body.trim()) return json(res, 400, { error: 'body required for comment' });
+      if (body.length > MAX_REPLY_CHARS) {
+        return json(res, 400, { error: `body too long (max ${MAX_REPLY_CHARS} chars)` });
+      }
+      args = ['pr', 'comment', String(number), '--repo', GH_REPO, '--body', body];
+    }
+
+    const r = await runGh(args, 30_000);
+    if (!r.ok) return json(res, 502, { error: r.error });
+    return json(res, 200, { status: action, number, out: (r.out || '').trim().slice(0, 1000) });
+  }
+
+  // GET /diff?pr=N — read what an agent actually changed before flipping or merging it.
+  if (req.method === 'GET' && pathname === '/diff') {
+    const number = Number(url.searchParams.get('pr'));
+    if (!Number.isInteger(number) || number < 1) {
+      return json(res, 400, { error: 'pr query param required (PR number)' });
+    }
+    const r = await runGh(['pr', 'diff', String(number), '--repo', GH_REPO], 30_000);
+    if (!r.ok) return json(res, 502, { error: r.error });
+    // A big refactor can produce megabytes of patch; the panel only needs enough to review.
+    const diff = r.out || '';
+    return json(res, 200, {
+      pr: number,
+      diff: diff.slice(0, MAX_DIFF_CHARS),
+      truncated: diff.length > MAX_DIFF_CHARS,
+      bytes: diff.length,
+    });
+  }
+
+  // GET /branches?repo=<slug> — branches and worktrees left behind by agent sessions.
+  // Without this there is no way to tell from Mission Control whether a repo is back to
+  // a clean main-only state or still carrying half-finished worktrees.
+  if (req.method === 'GET' && pathname === '/branches') {
+    const slug = url.searchParams.get('repo') || 'agentsystem';
+    let repoPath;
+    try {
+      repoPath = validateRepo(slug, loadKnownRepos()).path;
+    } catch (e) {
+      return json(res, 403, { error: e.message });
+    }
+
+    const [branches, worktrees, status, current] = await Promise.all([
+      runGit(['branch', '--format=%(refname:short)%09%(upstream:short)%09%(committerdate:relative)'], repoPath),
+      runGit(['worktree', 'list', '--porcelain'], repoPath),
+      runGit(['status', '--porcelain'], repoPath),
+      runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath),
+    ]);
+    if (!branches.ok) return json(res, 502, { error: branches.error });
+
+    return json(res, 200, {
+      repo: slug,
+      path: repoPath,
+      current: (current.out || '').trim(),
+      branches: (branches.out || '').trim().split('\n').filter(Boolean).map(line => {
+        const [name, upstream, age] = line.split('\t');
+        return { name, upstream: upstream || null, age };
+      }),
+      // --porcelain emits blank-line-separated stanzas; only the path and branch matter here.
+      worktrees: (worktrees.out || '').split('\n\n').filter(Boolean).map(block => {
+        const path = (block.match(/^worktree (.+)$/m) || [])[1] || null;
+        const branch = (block.match(/^branch refs\/heads\/(.+)$/m) || [])[1] || null;
+        return { path, branch };
+      }).filter(w => w.path),
+      dirty: (status.out || '').trim().split('\n').filter(Boolean).length,
+    });
   }
 
   // GET /scratchpads — list active task scratchpads

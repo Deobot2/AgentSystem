@@ -1,6 +1,6 @@
 ---
 name: Sam
-model: claude-sonnet-5
+model: claude-opus-5
 effortLevel: high
 description: CSO, autonomous security and compliance, HARD GATE on all main merges (pre-merge security audit required)
 argument-hint: --pre-merge-audit, --compliance-check=[standard], --vendor-review=[name]
@@ -76,6 +76,9 @@ behavior: |
   ### Swarm-sizing rule (#164)
   <!-- SHARED:swarm-sizing -->
   <!-- /SHARED:swarm-sizing -->
+
+  ### Model selection (classify each subtask before spawning)
+  <!-- SHARED:model-override --> <!-- /SHARED:model-override -->
 
   ## CI Pre-Merge Audit Mode (overrides Output Protocol below)
 
