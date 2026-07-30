@@ -573,7 +573,7 @@
   <nav class="tabs" aria-label="Panels">
     <button class="tab-btn active" onclick="switchTab('dispatch')">🚀 Dispatch</button>
     <button class="tab-btn" onclick="switchTab('fleet'); loadSessions(); loadRuns();">📡 Fleet</button>
-    <button class="tab-btn" onclick="switchTab('pipelines'); loadPipelines();">⚙️ Pipelines</button>
+    <button class="tab-btn" onclick="switchTab('pipelines'); loadPipelines(); loadBranches();">⚙️ Pipelines</button>
     <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
     <button class="tab-btn" onclick="switchTab('scratchpads'); loadScratchpads();">📝 Tasks</button>
     <button class="tab-btn" onclick="switchTab('briefing'); loadBriefing();">📰 Briefing</button>
@@ -705,6 +705,26 @@
       <h2>🔀 Open Pull Requests</h2>
       <div class="runs-list" id="pr-list">
         <div class="loading">Loading pull requests...</div>
+      </div>
+    </section>
+
+    <!-- Diff viewer — review an agent's changes before flipping or merging its PR -->
+    <section class="glass-card" id="pr-diff-viewer" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;">
+        <h2 id="pr-diff-title" style="margin-bottom:0; text-transform:none; letter-spacing:0;">Diff</h2>
+        <button class="btn-action" onclick="document.getElementById('pr-diff-viewer').style.display='none'">Close</button>
+      </div>
+      <pre id="pr-diff-body" class="terminal-box" style="max-height: 420px;"></pre>
+    </section>
+
+    <!-- Branches + worktrees: is the repo back to a clean main-only state or not? -->
+    <section class="glass-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;">
+        <h2 style="margin-bottom:0;">🌿 Branches &amp; Worktrees</h2>
+        <button class="btn-action" onclick="loadBranches()">Refresh</button>
+      </div>
+      <div class="runs-list" id="branches-list">
+        <div class="loading">Loading branches...</div>
       </div>
     </section>
   </div>
@@ -1026,9 +1046,69 @@
             <div class="run-meta">${escapeHtml(p.branch || '')}</div>
             <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${badges.join('')}</div>
           </div>
-          <a class="btn-action" href="${escapeHtml(p.url)}" target="_blank" rel="noopener">Open ↗</a>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:flex-start;">
+            <button class="btn-action" onclick="viewDiff(${p.number})">Diff</button>
+            ${p.draft ? `<button class="btn-action" onclick="prAction(${p.number}, 'ready')">Ready</button>` : ''}
+            <button class="btn-action" onclick="prAction(${p.number}, 'merge')">Merge</button>
+            <a class="btn-action" href="${escapeHtml(p.url)}" target="_blank" rel="noopener">Open ↗</a>
+          </div>
         </div>`;
       }).join('');
+    }
+
+    async function viewDiff(number) {
+      const viewer = document.getElementById('pr-diff-viewer');
+      const body = document.getElementById('pr-diff-body');
+      document.getElementById('pr-diff-title').textContent = 'Diff: PR #' + number;
+      viewer.style.display = 'block';
+      body.textContent = 'Loading diff...';
+      try {
+        const d = await api('/diff?pr=' + number);
+        body.textContent = (d.diff || '(empty diff)')
+          + (d.truncated ? '\n\n--- truncated at 200000 chars (' + d.bytes + ' total) ---' : '');
+      } catch (e) {
+        body.textContent = 'Failed to load diff: ' + e.message;
+      }
+      viewer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Merging is irreversible from the panel's point of view, so it asks first.
+    // Branch protection still requires the tests and Sam's audit — /pr never passes --admin.
+    async function prAction(number, action) {
+      if (action === 'merge' && !confirm(`Squash-merge PR #${number} into main and delete its branch?`)) return;
+      if (action === 'ready' && !confirm(`Mark PR #${number} ready for review? This fires the required checks.`)) return;
+      try {
+        await api('/pr', { method: 'POST', body: JSON.stringify({ number, action }) });
+        loadPipelines();
+      } catch (e) {
+        alert(`PR #${number} ${action} failed: ${e.message}`);
+      }
+    }
+
+    async function loadBranches() {
+      const el = document.getElementById('branches-list');
+      el.innerHTML = '<div class="loading">Loading branches...</div>';
+      try {
+        const d = await api('/branches');
+        const wtByBranch = {};
+        (d.worktrees || []).forEach(w => { if (w.branch) wtByBranch[w.branch] = w.path; });
+        const head = `<div class="run-item">
+          <div>
+            <div class="run-name">${escapeHtml(d.repo)} @ ${escapeHtml(d.current)}</div>
+            <div class="run-meta">${escapeHtml(d.path)}</div>
+          </div>
+          <span class="status-badge ${d.dirty ? 'pending' : 'passing'}">${d.dirty ? d.dirty + ' dirty' : 'clean'}</span>
+        </div>`;
+        el.innerHTML = head + (d.branches || []).map(b => `<div class="run-item">
+          <div>
+            <div class="run-name">${escapeHtml(b.name)}</div>
+            <div class="run-meta">${escapeHtml(b.age || '')}${b.upstream ? ' · tracks ' + escapeHtml(b.upstream) : ' · no upstream'}${wtByBranch[b.name] ? ' · worktree ' + escapeHtml(wtByBranch[b.name]) : ''}</div>
+          </div>
+          ${wtByBranch[b.name] ? '<span class="status-badge draft">worktree</span>' : ''}
+        </div>`).join('');
+      } catch (e) {
+        el.innerHTML = '<div class="error">Failed to load branches: ' + escapeHtml(e.message) + '</div>';
+      }
     }
 
     function setHarness(h) {
@@ -1130,18 +1210,23 @@
         container.innerHTML = data.sessions.map(s => {
           const name = sessionLabel(s);
           const running = s.status === 'running' || s.status === 'spawning';
+          // `claude agents --json` reports state:"blocked" when a session asked a question
+          // and is waiting. Only claude sessions carry the full sessionId that /reply needs.
+          const blocked = s.state === 'blocked';
           return `
             <div class="session-item">
               <div>
                 <div class="session-name">
                   ${name}
                   <span class="status-badge ${s.status}">${s.status}</span>
+                  ${blocked ? '<span class="status-badge pending">waiting on you</span>' : ''}
                 </div>
                 <div class="session-meta">
                   Repo: ${(s.repo || 'unknown').toUpperCase()} | ID: ${s.id}
                 </div>
               </div>
               <div style="display:flex; gap:6px;">
+                ${s.sessionId ? `<button class="btn-action" onclick="replySession('${s.sessionId}', '${name}')">Reply</button>` : ''}
                 <button class="btn-action" onclick="viewLogStream('${s.id}', '${name}')">Logs</button>
                 ${running ? `<button class="btn-action btn-stop" onclick="stopSession('${s.id}')">Stop</button>` : ''}
               </div>
@@ -1150,6 +1235,20 @@
         }).join('');
       } catch (e) {
         container.innerHTML = '<div class="error">Failed to load sessions: ' + e.message + '</div>';
+      }
+    }
+
+    // Answer a session that asked a question. Before this, a session in state "blocked"
+    // could only be unblocked from a terminal on the host.
+    async function replySession(sessionId, name) {
+      const message = prompt(`Reply to ${name}:`);
+      if (!message || !message.trim()) return;
+      try {
+        const d = await api('/reply', { method: 'POST', body: JSON.stringify({ sessionId, message }) });
+        alert('Sent. Following as ' + d.backgroundId + '.');
+        loadSessions();
+      } catch (e) {
+        alert('Reply failed: ' + e.message);
       }
     }
 

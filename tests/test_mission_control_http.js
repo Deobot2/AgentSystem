@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -67,6 +67,12 @@ test.before(async () => {
   writeFileSync(path.join(home, 'agent-memory', 'nexus', 'known-repos.json'),
     JSON.stringify({ repos: [{ slug: 'demo', path: home, bootstrap_complete: true }] }));
   writeFileSync(path.join(home, 'agent-memory', 'nexus', 'tasks', 'demo', '42', 'scratchpad.md'), '# scratch\nhello\n');
+
+  // /branches shells out to git, so the seeded repo has to actually be one.
+  // -c user.* because a CI runner has no global git identity to commit with.
+  execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q', home]);
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q',
+    '--allow-empty', '-m', 'seed'], { cwd: home });
 
   proc = spawn(process.execPath, [SERVER], {
     env: { ...process.env, HOME: home, PORT: String(PORT), HOST: '127.0.0.1' },
@@ -145,6 +151,59 @@ test('GET /memory/search returns empty results, not a 500', async () => {
   const r = await api('/memory/search?agent=jarvis&query=anything');
   assert.equal(r.status, 200);
   assert.deepEqual((await r.json()).results, []);
+});
+
+// ── The MC-only workflow endpoints ────────────────────────────────────────────
+// These close the loop that used to need a terminal on the host: answer a blocked
+// session, review a diff, flip/merge the PR, see what branches are left behind.
+// gh isn't authenticated in CI, so the PR/diff assertions cover validation only.
+
+test('POST /reply rejects a non-UUID sessionId', async () => {
+  const r = await api('/reply', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: '../../etc/passwd', message: 'hi' }),
+  });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /UUID/);
+});
+
+test('POST /reply requires a message', async () => {
+  const r = await api('/reply', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: '11111111-2222-4333-8444-555555555555', message: '   ' }),
+  });
+  assert.equal(r.status, 400);
+});
+
+test('POST /pr rejects an unknown action', async () => {
+  const r = await api('/pr', { method: 'POST', body: JSON.stringify({ number: 1, action: 'close' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /Valid: ready, merge, comment/);
+});
+
+test('POST /pr rejects a non-numeric PR number', async () => {
+  const r = await api('/pr', { method: 'POST', body: JSON.stringify({ number: 'main', action: 'ready' }) });
+  assert.equal(r.status, 400);
+});
+
+test('GET /diff requires a pr number', async () => {
+  const r = await api('/diff');
+  assert.equal(r.status, 400);
+});
+
+test('GET /branches rejects a repo outside the allowlist', async () => {
+  const r = await api('/branches?repo=not-a-known-repo');
+  assert.equal(r.status, 403);
+});
+
+test('GET /branches reports the seeded repo branch and worktree', async () => {
+  const r = await api('/branches?repo=demo');
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.current, 'main');
+  assert.ok(body.branches.some(b => b.name === 'main'), 'main missing from branch list');
+  assert.equal(body.worktrees.length, 1);
+  assert.equal(body.worktrees[0].branch, 'main');
 });
 
 test('unhandled endpoint error returns 500, server survives', async () => {

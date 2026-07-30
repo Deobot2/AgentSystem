@@ -3,7 +3,7 @@
 //
 // Built-in handlers:
 //   run-tool     payload: { script, args? }  — run a Node script from tools/ (path-confined)
-//   spawn-agent  payload: { agent, prompt, cwd? } — spawn `claude --bg --agent <agent> -p <prompt>`
+//   spawn-agent  payload: { agent, prompt, cwd? } — spawn `claude --bg --agent <agent> <prompt>`
 //   noop         payload: anything — completes immediately (testing/heartbeat)
 //
 // Run modes:
@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as bus from './event-bus.js';
+import { claudeBgArgs } from './mission-control/claude-args.js';
 
 const TOOLS_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,8 +67,9 @@ export function spawnAgentHandler(payload) {
     // claude is a .cmd shim on Windows — needs a shell. Build the command string
     // ourselves with explicit quoting so payload.prompt can never break out;
     // spawnSync's args-array + shell:true does NOT escape.
-    ? spawnSync(`claude --bg --agent ${agent}${modelFlag} -p ${cmdQuote(payload.prompt)}`, { ...opts, shell: true })
-    : spawnSync('claude', ['--bg', '--agent', agent, ...(model ? ['--model', model] : []), '-p', String(payload.prompt)], opts);
+    // The prompt is the positional -- `--bg -p` is rejected by the CLI, see claude-args.js.
+    ? spawnSync(`claude --bg --agent ${agent}${modelFlag} ${cmdQuote(payload.prompt)}`, { ...opts, shell: true })
+    : spawnSync('claude', claudeBgArgs({ agent, prompt: payload.prompt, model }), opts);
   const out = `${res.stdout || ''}${res.stderr || ''}`;
   if (res.error) throw res.error;
   if (res.status !== 0) throw new Error(`claude --bg exit ${res.status}: ${out.slice(-300)}`);

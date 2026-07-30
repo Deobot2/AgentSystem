@@ -15,6 +15,11 @@
  *   GET  /log/:id       — tail agent run log (last 100 lines)
  *   POST /run           — spawn background agent
  *                         body: { agent, prompt, cwd? }
+ *   POST /reply         — answer a session waiting on input
+ *                         body: { sessionId, message }
+ *   POST /pr            — act on a PR: body { number, action: ready|merge|comment, body? }
+ *   GET  /diff?pr=      — unified diff for a PR
+ *   GET  /branches?repo= — branches + worktrees for an allowlisted repo
  *   POST /github        — GitHub webhook → auto-route to agent
  */
 
@@ -27,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionRegistry } from './session-registry.js';
 import { validateRepo } from './repo-validator.js';
+import { claudeBgArgs } from './claude-args.js';
 import { spawnAgyPersistent } from './agy-dispatcher.js';
 import { ipAllowed as ipAllowedFor, normalizeIp } from './ip-utils.js';
 import { lanAddresses, publicBaseUrl } from './url-utils.js';
@@ -361,7 +367,7 @@ function spawnAgent(agent, prompt, cwd = HOME, model = null) {
 
     // Use --bg for proper daemon-managed background sessions
     // stdout: "backgrounded · <8-char-id>"
-    const bgArgs = ['--bg', '--agent', agent, ...(model ? ['--model', model] : []), '-p', prompt];
+    const bgArgs = claudeBgArgs({ agent, prompt, model });
     const child = spawn(CLAUDE, bgArgs, {
       cwd: existsSync(cwd) ? cwd : HOME,
       env: { ...process.env, HOME },
@@ -559,6 +565,23 @@ function runGh(args, timeoutMs = 8000) {
     child.on('error', e => { clearTimeout(t); resolve({ ok: false, error: e.message }); });
   });
 }
+
+function runGit(args, cwd, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let out = '', err = '';
+    const child = spawn('git', args, { cwd, env: { ...process.env, HOME } });
+    const t = setTimeout(() => { child.kill(); resolve({ ok: false, error: 'git timed out' }); }, timeoutMs);
+    child.stdout?.on('data', d => out += d);
+    child.stderr?.on('data', d => err += d);
+    child.on('close', code => { clearTimeout(t); code === 0 ? resolve({ ok: true, out }) : resolve({ ok: false, error: (err.trim() || `git exited ${code}`) }); });
+    child.on('error', e => { clearTimeout(t); resolve({ ok: false, error: e.message }); });
+  });
+}
+
+// Free-text bodies (session replies, PR comments) reach a CLI argv slot, so they get a
+// ceiling — and a diff can be megabytes, which no panel needs to render.
+const MAX_REPLY_CHARS = 10_000;
+const MAX_DIFF_CHARS = 200_000;
 
 function rollupState(rollup) {
   if (!Array.isArray(rollup) || rollup.length === 0) return 'none';
@@ -1080,6 +1103,137 @@ async function handleRequest(req, res) {
       return json(res, 500, { error: `Failed to stop session: ${e.message}` });
     }
     return;
+  }
+
+  // POST /reply — answer a background session that is waiting on a human.
+  //
+  // `claude agents --json` already reports state:"blocked" for a session that asked a
+  // question, but Mission Control had no way to answer one, so a blocked session sat
+  // there until somebody opened a terminal on the host. There is no CLI verb that
+  // messages a live background session; resuming it with a new prompt is the
+  // scriptable equivalent and lands in the same conversation.
+  if (req.method === 'POST' && pathname === '/reply') {
+    const { parsed } = await readBody(req);
+    const sessionId = String(parsed.sessionId || '');
+    const message = String(parsed.message || '');
+
+    // The session id reaches an argv slot, and a loose value would also let a caller
+    // resume any conversation on the box — so it is pinned to the UUID shape the CLI mints.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+      return json(res, 400, { error: 'sessionId must be a full session UUID (from /sessions)' });
+    }
+    if (!message.trim()) return json(res, 400, { error: 'message required' });
+    if (message.length > MAX_REPLY_CHARS) {
+      return json(res, 400, { error: `message too long (max ${MAX_REPLY_CHARS} chars)` });
+    }
+
+    auditLog('reply_session', req, { sessionId, chars: message.length });
+
+    const { out, err } = await runClaude(claudeBgArgs({ resumeId: sessionId, prompt: message }));
+    const combined = out + err;
+    const m = combined.match(/backgrounded\s*[·•]\s*([a-f0-9]+)/i);
+    if (!m) {
+      return json(res, 502, {
+        error: 'claude did not background the resumed session',
+        detail: combined.trim().slice(0, 500),
+      });
+    }
+    // Resuming mints a new background id; the caller needs it to follow the reply.
+    return json(res, 200, { status: 'replied', sessionId, backgroundId: m[1] });
+  }
+
+  // POST /pr — act on a pull request. /pipelines could only show PRs, so the last
+  // step of every task still needed a laptop: flip the draft so the required audit
+  // fires, then merge once it is green.
+  if (req.method === 'POST' && pathname === '/pr') {
+    const { parsed } = await readBody(req);
+    const number = Number(parsed.number);
+    const action = String(parsed.action || '');
+
+    if (!Number.isInteger(number) || number < 1) {
+      return json(res, 400, { error: 'number required (PR number)' });
+    }
+    if (!['ready', 'merge', 'comment'].includes(action)) {
+      return json(res, 400, { error: `Unknown action "${action}". Valid: ready, merge, comment` });
+    }
+
+    auditLog('pr_action', req, { number, action });
+
+    let args;
+    if (action === 'ready') {
+      args = ['pr', 'ready', String(number), '--repo', GH_REPO];
+    } else if (action === 'merge') {
+      // No --admin: branch protection on main requires the tests and the security audit,
+      // and a merge button that could skip them would defeat the point of the gate.
+      args = ['pr', 'merge', String(number), '--repo', GH_REPO, '--squash', '--delete-branch'];
+    } else {
+      const body = String(parsed.body || '');
+      if (!body.trim()) return json(res, 400, { error: 'body required for comment' });
+      if (body.length > MAX_REPLY_CHARS) {
+        return json(res, 400, { error: `body too long (max ${MAX_REPLY_CHARS} chars)` });
+      }
+      args = ['pr', 'comment', String(number), '--repo', GH_REPO, '--body', body];
+    }
+
+    const r = await runGh(args, 30_000);
+    if (!r.ok) return json(res, 502, { error: r.error });
+    return json(res, 200, { status: action, number, out: (r.out || '').trim().slice(0, 1000) });
+  }
+
+  // GET /diff?pr=N — read what an agent actually changed before flipping or merging it.
+  if (req.method === 'GET' && pathname === '/diff') {
+    const number = Number(url.searchParams.get('pr'));
+    if (!Number.isInteger(number) || number < 1) {
+      return json(res, 400, { error: 'pr query param required (PR number)' });
+    }
+    const r = await runGh(['pr', 'diff', String(number), '--repo', GH_REPO], 30_000);
+    if (!r.ok) return json(res, 502, { error: r.error });
+    // A big refactor can produce megabytes of patch; the panel only needs enough to review.
+    const diff = r.out || '';
+    return json(res, 200, {
+      pr: number,
+      diff: diff.slice(0, MAX_DIFF_CHARS),
+      truncated: diff.length > MAX_DIFF_CHARS,
+      bytes: diff.length,
+    });
+  }
+
+  // GET /branches?repo=<slug> — branches and worktrees left behind by agent sessions.
+  // Without this there is no way to tell from Mission Control whether a repo is back to
+  // a clean main-only state or still carrying half-finished worktrees.
+  if (req.method === 'GET' && pathname === '/branches') {
+    const slug = url.searchParams.get('repo') || 'agentsystem';
+    let repoPath;
+    try {
+      repoPath = validateRepo(slug, loadKnownRepos()).path;
+    } catch (e) {
+      return json(res, 403, { error: e.message });
+    }
+
+    const [branches, worktrees, status, current] = await Promise.all([
+      runGit(['branch', '--format=%(refname:short)%09%(upstream:short)%09%(committerdate:relative)'], repoPath),
+      runGit(['worktree', 'list', '--porcelain'], repoPath),
+      runGit(['status', '--porcelain'], repoPath),
+      runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath),
+    ]);
+    if (!branches.ok) return json(res, 502, { error: branches.error });
+
+    return json(res, 200, {
+      repo: slug,
+      path: repoPath,
+      current: (current.out || '').trim(),
+      branches: (branches.out || '').trim().split('\n').filter(Boolean).map(line => {
+        const [name, upstream, age] = line.split('\t');
+        return { name, upstream: upstream || null, age };
+      }),
+      // --porcelain emits blank-line-separated stanzas; only the path and branch matter here.
+      worktrees: (worktrees.out || '').split('\n\n').filter(Boolean).map(block => {
+        const path = (block.match(/^worktree (.+)$/m) || [])[1] || null;
+        const branch = (block.match(/^branch refs\/heads\/(.+)$/m) || [])[1] || null;
+        return { path, branch };
+      }).filter(w => w.path),
+      dirty: (status.out || '').trim().split('\n').filter(Boolean).length,
+    });
   }
 
   // GET /scratchpads — list active task scratchpads
