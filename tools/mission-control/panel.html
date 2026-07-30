@@ -889,7 +889,15 @@
     }
 
     function escapeHtml(s) {
-      return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // Session/agent names come from `claude agents --json`, not from this file, and they get
+    // interpolated into onclick="fn('...')" — a quote or newline in one would otherwise end the
+    // JS string and run whatever followed. JSON.stringify quotes and escapes the value, then
+    // escapeHtml protects the attribute; the parser decodes the entity before JS sees it.
+    function jsArg(s) {
+      return escapeHtml(JSON.stringify(String(s == null ? '' : s)));
     }
 
     // ── PWA service worker (makes the panel installable) ──
@@ -1217,18 +1225,18 @@
             <div class="session-item">
               <div>
                 <div class="session-name">
-                  ${name}
-                  <span class="status-badge ${s.status}">${s.status}</span>
+                  ${escapeHtml(name)}
+                  <span class="status-badge ${escapeHtml(s.status)}">${escapeHtml(s.status)}</span>
                   ${blocked ? '<span class="status-badge pending">waiting on you</span>' : ''}
                 </div>
                 <div class="session-meta">
-                  Repo: ${(s.repo || 'unknown').toUpperCase()} | ID: ${s.id}
+                  Repo: ${escapeHtml(String(s.repo || 'unknown').toUpperCase())} | ID: ${escapeHtml(s.id)}
                 </div>
               </div>
               <div style="display:flex; gap:6px;">
-                ${s.sessionId ? `<button class="btn-action" onclick="replySession('${s.sessionId}', '${name}')">Reply</button>` : ''}
-                <button class="btn-action" onclick="viewLogStream('${s.id}', '${name}')">Logs</button>
-                ${running ? `<button class="btn-action btn-stop" onclick="stopSession('${s.id}')">Stop</button>` : ''}
+                ${s.sessionId ? `<button class="btn-action" onclick="replySession(${jsArg(s.sessionId)}, ${jsArg(name)})">Reply</button>` : ''}
+                <button class="btn-action" onclick="viewLogStream(${jsArg(s.id)}, ${jsArg(name)})">Logs</button>
+                ${running ? `<button class="btn-action btn-stop" onclick="stopSession(${jsArg(s.id)})">Stop</button>` : ''}
               </div>
             </div>
           `;
@@ -1269,7 +1277,7 @@
                 <div class="run-name">👤 ${r.agent.toUpperCase()}</div>
                 <div class="run-meta">Started at ${date} | ID: ${r.id}</div>
               </div>
-              <button class="btn-action" onclick="viewLogStream('${r.id}', '${r.agent}')">Read Logs</button>
+              <button class="btn-action" onclick="viewLogStream(${jsArg(r.id)}, ${jsArg(r.agent)})">Read Logs</button>
             </div>
           `;
         }).join('');
@@ -1389,7 +1397,7 @@
           return;
         }
         container.innerHTML = data.scratchpads.map(s => `
-          <div class="repo-item" onclick="viewScratchpad('${s.project}', '${s.issue}')">
+          <div class="repo-item" onclick="viewScratchpad(${jsArg(s.project)}, ${jsArg(s.issue)})">
             <div>
               <div class="repo-name">🔧 ${s.project} / Issue #${s.issue}</div>
               <div class="repo-path" style="font-size:11px;">${s.path.split('/').pop()}</div>
@@ -1511,9 +1519,9 @@
         }
 
         resultsDiv.innerHTML = data.results.map(r => `
-          <div class="repo-item" onclick="loadMemoryFile('${r.path.replace(/\\\\/g, "/")}')">
+          <div class="repo-item" onclick="loadMemoryFile(${jsArg(String(r.path).replace(/\\\\/g, '/'))})">
             <div>
-              <div class="repo-name">🧠 ${r.file}</div>
+              <div class="repo-name">🧠 ${escapeHtml(r.file)}</div>
               <div class="repo-path" style="font-size:11px; word-break:break-all;">Path: ${r.path}</div>
             </div>
             <div style="text-align:right;">
