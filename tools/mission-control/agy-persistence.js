@@ -22,7 +22,22 @@ mkdirSync(LOG_BASE, { recursive: true });
 // via env var (matches agy-dispatcher.js confirmation-required stance).
 const ALLOW_SKIP_PERMISSIONS = process.env.AGY_ALLOW_DANGEROUS_SKIP_PERMISSIONS === '1' || process.env.AGY_ALLOW_DANGEROUS_SKIP_PERMISSIONS === 'true';
 
-export async function spawnAgyPersistent({ prompt, repoPath, model, continueId }) {
+// agy CLI argv for one headless run. Flag names per `agy --help`:
+//   --agent <name>        agent from the installed plugin roster (`agy agents`)
+//   --conversation <id>   resume by ID. NOT `--continue <id>` — `--continue` is a
+//                         boolean ("most recent conversation") and swallowing an ID
+//                         after it leaves the ID as a stray positional arg.
+export function agyArgs({ prompt, repoPath, model, agent, continueId }) {
+  const args = ['-p', prompt];
+  if (agent) args.push('--agent', agent);
+  if (model) args.push('--model', model);
+  if (continueId) args.push('--conversation', continueId);
+  if (ALLOW_SKIP_PERMISSIONS) args.push('--dangerously-skip-permissions');
+  args.push('--add-dir', repoPath);
+  return args;
+}
+
+export async function spawnAgyPersistent({ prompt, repoPath, model, agent, continueId }) {
   if (!existsSync(repoPath)) throw new Error(`Repo not found: ${repoPath}`);
 
   const timestamp = Date.now();
@@ -31,11 +46,7 @@ export async function spawnAgyPersistent({ prompt, repoPath, model, continueId }
   const logPath = join(LOG_BASE, `${sessionId}.log`);
   const metaPath = join(LOG_BASE, `${sessionId}.json`);
 
-  const args = ['-p', prompt];
-  if (model) args.push('--model', model);
-  if (continueId) args.push('--continue', continueId);
-  else if (ALLOW_SKIP_PERMISSIONS) args.push('--dangerously-skip-permissions');
-  args.push('--add-dir', repoPath);
+  const args = agyArgs({ prompt, repoPath, model, agent, continueId });
 
   return new Promise((resolve, reject) => {
     // Build tmux command with separate argv (NO shell interpretation of user input)
@@ -49,10 +60,10 @@ export async function spawnAgyPersistent({ prompt, repoPath, model, continueId }
       // NO shell: true — spawn uses execvp, which does NOT interpret shell metacharacters
     });
 
-    tmux.on('error', () => spawnDirect({ prompt, repoPath, model, continueId, logPath, sessionId, tmuxSessionName }).then(resolve).catch(reject));
+    tmux.on('error', () => spawnDirect({ args, repoPath, model, logPath, sessionId }).then(resolve).catch(reject));
 
     tmux.on('close', (code) => {
-      if (code !== 0) return spawnDirect({ prompt, repoPath, model, continueId, logPath, sessionId, tmuxSessionName }).then(resolve).catch(reject);
+      if (code !== 0) return spawnDirect({ args, repoPath, model, logPath, sessionId }).then(resolve).catch(reject);
 
       // Setup log capture via tmux pipe-pane (only logPath is embedded in shell, which is safe—it's generated, not user input)
       const pipePaneCmd = spawn('tmux', ['pipe-pane', '-t', tmuxSessionName, '-o', `cat >> '${logPath}'`], {
@@ -83,14 +94,12 @@ export async function spawnAgyPersistent({ prompt, repoPath, model, continueId }
   });
 }
 
-async function spawnDirect({ prompt, repoPath, model, continueId, logPath, sessionId, tmuxSessionName }) {
+// tmux missing or failed: run agy detached instead. Returns tmuxSessionName: null —
+// reporting a name for a session tmux never created sent /stop down the
+// `tmux kill-session` branch, which fails, resolves exitCode 0 anyway, and marks the
+// session exited while the real agy process kept running. Null routes /stop to the pid.
+async function spawnDirect({ args, repoPath, model, logPath, sessionId }) {
   return new Promise((resolve) => {
-    const args = ['-p', prompt];
-    if (model) args.push('--model', model);
-    if (continueId) args.push('--continue', continueId);
-    else if (ALLOW_SKIP_PERMISSIONS) args.push('--dangerously-skip-permissions');
-    args.push('--add-dir', repoPath);
-
     const agy = spawn('agy', args, { cwd: repoPath, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME } });
     agy.unref();
     const pid = agy.pid;
@@ -101,11 +110,11 @@ async function spawnDirect({ prompt, repoPath, model, continueId, logPath, sessi
     const conversationId = sessionId;
     const metaPath = join(LOG_BASE, `${sessionId}.json`);
     writeFileSync(metaPath, JSON.stringify({
-      id: sessionId, tmuxSessionName, pid, logPath, conversationId,
-      spawnedAt: new Date().toISOString(), model, repoPath, prompt: prompt.slice(0, 200), method: 'direct',
+      id: sessionId, tmuxSessionName: null, pid, logPath, conversationId,
+      spawnedAt: new Date().toISOString(), model, repoPath, prompt: args[1].slice(0, 200), method: 'direct',
     }, null, 2));
 
-    resolve({ tmuxSessionName, pid, logPath, conversationId, spawnedAt: new Date().toISOString() });
+    resolve({ tmuxSessionName: null, pid, logPath, conversationId, spawnedAt: new Date().toISOString() });
   });
 }
 
@@ -146,8 +155,8 @@ export async function getAgyLog(sessionId, { tail = 100 } = {}) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'spawn') {
-    const [prompt, repoPath, model, continueId] = args;
-    spawnAgyPersistent({ prompt, repoPath, model, continueId })
+    const [prompt, repoPath, model, agent, continueId] = args;
+    spawnAgyPersistent({ prompt, repoPath, model, agent, continueId })
       .then(r => console.log(JSON.stringify(r, null, 2)))
       .catch(e => { console.error('Error:', e.message); process.exit(1); });
   } else if (cmd === 'stop') {

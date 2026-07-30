@@ -600,33 +600,37 @@
         </select>
       </div>
 
-      <!-- Claude Specific Fields -->
-      <div id="claude-fields">
-        <div class="form-group">
-          <label for="agent-select">Lead Agent Specialist</label>
-          <select id="agent-select">
-            <option value="jarvis">Jarvis — CEO (Orchestration & Business)</option>
-            <option value="friday" selected>Friday — CTO (Technical lead / Code / Arch)</option>
-            <option value="sam">Sam — CSO (Security & Audits)</option>
-            <option value="nat">Nat — CBO (Strategy & GTM)</option>
-            <option value="ultron">Ultron (Backend & APIs)</option>
-            <option value="pym">Pym (Database & Schemas)</option>
-            <option value="leo">Leo (DevOps & CI/CD)</option>
-            <option value="astra">Astra (Frontend & Components)</option>
-            <option value="wanda">Wanda (Design & UI/UX)</option>
-            <option value="threepio">Threepio (Docs & Release Notes)</option>
-          </select>
-        </div>
+      <!-- Agent roster — applies to BOTH harnesses. sync-agents.js installs the same
+           roster into Antigravity as the `agentsystem` plugin, so agy takes these
+           names via `agy --agent <name>`. This block used to be Claude-only, which is
+           why Antigravity dispatch showed no agents and always ran agy's default. -->
+      <div class="form-group">
+        <label for="agent-select">Lead Agent Specialist</label>
+        <select id="agent-select">
+          <option value="jarvis">Jarvis — CEO (Orchestration & Business)</option>
+          <option value="friday" selected>Friday — CTO (Technical lead / Code / Arch)</option>
+          <option value="sam">Sam — CSO (Security & Audits)</option>
+          <option value="nat">Nat — CBO (Strategy & GTM)</option>
+          <option value="ultron">Ultron (Backend & APIs)</option>
+          <option value="pym">Pym (Database & Schemas)</option>
+          <option value="leo">Leo (DevOps & CI/CD)</option>
+          <option value="astra">Astra (Frontend & Components)</option>
+          <option value="wanda">Wanda (Design & UI/UX)</option>
+          <option value="threepio">Threepio (Docs & Release Notes)</option>
+        </select>
       </div>
 
       <!-- Antigravity Specific Fields -->
       <div id="agy-fields" style="display: none;">
         <div class="form-group">
-          <label for="model-select">Lead Model</label>
+          <label for="model-select">Model Override</label>
           <select id="model-select">
-            <option value="gemini-3.1-pro-preview" selected>gemini-3.1-pro-preview (Jarvis/Sam)</option>
-            <option value="gemini-3-flash-preview">gemini-3-flash-preview (Friday/Nat)</option>
-            <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (Workers)</option>
+            <!-- Default empty: each agy plugin agent already declares its own model
+                 (MODELS.gemini in sync-agents.js). Always sending --model overrode it. -->
+            <option value="" selected>Auto — use the agent's own model</option>
+            <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (pro)</option>
+            <option value="gemini-3-flash-preview">gemini-3-flash-preview (flash)</option>
+            <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (lite)</option>
           </select>
         </div>
       </div>
@@ -943,7 +947,7 @@
       document.getElementById('recent-chips').innerHTML = list.map((e, i) => {
         const p = e.prompt || '';
         const short = p.length > 34 ? p.slice(0, 34) + '…' : p;
-        const tag = e.harness === 'agy' ? 'AGY' : (e.agent || '?').toUpperCase();
+        const tag = (e.harness === 'agy' ? 'AGY:' : '') + (e.agent || '?').toUpperCase();
         return `<button type="button" class="chip recent" title="${escapeHtml(p)}" onclick="applyRecent(${i})">↻ ${escapeHtml(tag)}: ${escapeHtml(short)}</button>`;
       }).join('');
     }
@@ -1032,13 +1036,8 @@
       document.querySelectorAll('.harness-btn').forEach(b => b.classList.remove('active'));
       document.querySelector(`.harness-btn[data-val="${h}"]`).classList.add('active');
 
-      if (h === 'claude') {
-        document.getElementById('claude-fields').style.display = 'block';
-        document.getElementById('agy-fields').style.display = 'none';
-      } else {
-        document.getElementById('claude-fields').style.display = 'none';
-        document.getElementById('agy-fields').style.display = 'block';
-      }
+      // Agent picker is shared; only the agy model override is harness-specific.
+      document.getElementById('agy-fields').style.display = h === 'agy' ? 'block' : 'none';
     }
 
     function toggleFactTarget() {
@@ -1101,6 +1100,13 @@
       }
     }
 
+    // Both harnesses carry an agent now, so label them the same way. Antigravity rows
+    // used to be a bare "Antigravity" with the agent dropped on the server side.
+    function sessionLabel(s) {
+      const harness = s.harness === 'agy' ? 'Antigravity' : 'Claude';
+      return harness + ': ' + (s.agent || 'default').toUpperCase();
+    }
+
     async function loadSessions() {
       const container = document.getElementById('sessions-list');
       try {
@@ -1110,7 +1116,7 @@
 
         // Detect sessions that finished since the last poll → notify.
         const curMap = {};
-        active.forEach(s => { curMap[s.id] = s.harness === 'agy' ? 'Antigravity' : 'Claude: ' + (s.agent || 'Agent').toUpperCase(); });
+        active.forEach(s => { curMap[s.id] = sessionLabel(s); });
         Object.keys(prevSessionMap).forEach(id => {
           if (!(id in curMap)) notify('Session finished', prevSessionMap[id] + ' completed');
         });
@@ -1122,8 +1128,7 @@
         }
 
         container.innerHTML = data.sessions.map(s => {
-          const isAgy = s.harness === 'agy';
-          const name = isAgy ? 'Antigravity' : 'Claude: ' + (s.agent || 'Agent').toUpperCase();
+          const name = sessionLabel(s);
           const running = s.status === 'running' || s.status === 'spawning';
           return `
             <div class="session-item">
@@ -1191,8 +1196,8 @@
         harness: currentHarness,
         repo,
         prompt,
-        agent: currentHarness === 'claude' ? agent : null,
-        model: currentHarness === 'agy' ? model : null,
+        agent,
+        model: currentHarness === 'agy' ? (model || null) : null,
       };
 
       try {
@@ -1204,8 +1209,8 @@
         pushRecent({
           harness: currentHarness,
           repo,
-          agent: currentHarness === 'claude' ? agent : null,
-          model: currentHarness === 'agy' ? model : null,
+          agent,
+          model: currentHarness === 'agy' ? (model || null) : null,
           prompt,
         });
         document.getElementById('prompt-input').value = '';
