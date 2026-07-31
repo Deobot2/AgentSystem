@@ -824,15 +824,29 @@ async function handleRequest(req, res) {
     return json(res, 200, { runs: getRecentRuns() });
   }
 
-  // GET /briefing — newest daily briefing markdown ($LIFE_REPO/briefings, default ~/life)
+  // GET /briefing — newest daily digest markdown from $LIFE_REPO (default ~/life).
+  // Prefers closeouts/ over briefings/: the 07:00 daily-triage closeout already rolls up the
+  // 06:00 stage-1 brief AND reports what got executed, so when both exist for a day the closeout
+  // is strictly the better read. briefings/ stays the fallback for days stage 2 never ran.
   if (req.method === 'GET' && pathname === '/briefing') {
-    const dir = `${process.env.LIFE_REPO || `${HOME}/life`}/briefings`;
-    let file = null;
-    try {
-      file = readdirSync(dir).filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().pop();
-    } catch {}
+    const root = process.env.LIFE_REPO || `${HOME}/life`;
+    const newest = (sub) => {
+      try {
+        return readdirSync(`${root}/${sub}`)
+          .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().pop() || null;
+      } catch { return null; }
+    };
+    // Compare dates, not just presence: a stale closeout must not shadow today's brief.
+    const closeout = newest('closeouts');
+    const briefing = newest('briefings');
+    const kind = (closeout && (!briefing || closeout >= briefing)) ? 'closeouts' : 'briefings';
+    const file = kind === 'closeouts' ? closeout : briefing;
     if (!file) return json(res, 404, { error: 'No briefing found' });
-    return json(res, 200, { date: file.replace('.md', ''), markdown: readFileSync(`${dir}/${file}`, 'utf8') });
+    return json(res, 200, {
+      date: file.replace('.md', ''),
+      kind: kind === 'closeouts' ? 'closeout' : 'briefing',
+      markdown: readFileSync(`${root}/${kind}/${file}`, 'utf8'),
+    });
   }
 
   // GET /log/:id — uses claude logs <id> for bg sessions, file fallback

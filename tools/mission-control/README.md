@@ -77,7 +77,7 @@ ssh -L 8765:127.0.0.1:8765 <user>@<server>
 | `ALLOWED_ORIGIN` | — | Single origin allowed for CORS. `*` is never emitted. |
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC secret for `POST /github`. Unset means every webhook is rejected. |
 | `GH_REPO` | `Zene8/AgentSystem` | Repo whose PRs + runner health `/pipelines` reports. |
-| `LIFE_REPO` | `~/life` | Root containing `briefings/` for `GET /briefing`. |
+| `LIFE_REPO` | `~/life` | Root containing `closeouts/` and `briefings/` for `GET /briefing`. Serves the newest `YYYY-MM-DD.md` from either, preferring `closeouts/` on a tie — the 07:00 daily-triage closeout already rolls up the 06:00 brief. |
 
 ## API
 

@@ -850,7 +850,7 @@
   <div id="panel-briefing" class="panel-content">
     <section class="glass-card">
       <h2 id="briefing-title">📰 Daily Briefing</h2>
-      <button id="briefing-run-btn" onclick="runBriefing()">▶ Run briefing now</button>
+      <button id="briefing-run-btn" onclick="runBriefing()">▶ Run daily triage now</button>
       <pre id="briefing-body" class="terminal-box" style="max-height: 70vh;">
         <div class="loading">Loading briefing...</div>
       </pre>
@@ -1563,16 +1563,21 @@
       body.innerHTML = '<div class="loading">Loading briefing...</div>';
       try {
         const data = await api('/briefing');
-        document.getElementById('briefing-title').textContent = '📰 Daily Briefing — ' + data.date;
+        // kind is 'closeout' (07:00 stage 2, rolls up stage 1 + what got executed) or
+        // 'briefing' (stage 1 only — stage 2 has not run for that day).
+        const label = data.kind === 'closeout' ? '✅ Daily Closeout' : '📰 Daily Briefing';
+        document.getElementById('briefing-title').textContent = label + ' — ' + data.date;
         body.textContent = data.markdown || 'Briefing is empty.';
       } catch (e) {
         body.innerHTML = '<div class="error">' + escapeHtml(e.message) + '</div>';
       }
     }
 
-    // Dispatch the Life OS daily-briefing skill on demand (the 6am UTC cron in
-    // scheduled-tasks.yml runs the same thing). The digest lands in $LIFE_REPO/briefings, which is
-    // what loadBriefing() reads — so the tab only updates once the agent finishes, not on click.
+    // Dispatch stage 2 (daily-triage) on demand — the 7am UTC cron in scheduled-tasks.yml runs the
+    // same thing. Stage 1 is Grok Tasks at 06:00 (external, see skills/daily-briefing/
+    // portable-prompt.md); the skill falls back to sweeping mail itself when that brief is missing,
+    // so this one button covers both. The closeout lands in $LIFE_REPO/closeouts, which is what
+    // loadBriefing() prefers — so the tab only updates once the agent finishes, not on click.
     async function runBriefing() {
       const btn = document.getElementById('briefing-run-btn');
       btn.disabled = true;
@@ -1583,25 +1588,18 @@
           body: JSON.stringify({
             harness: 'claude',
             repo: 'agentsystem',
-            agent: 'threepio',
-            // Overrides threepio's haiku default — a full mail sweep plus two Notion
-            // databases regularly exceeds haiku's 200K window.
-            model: 'claude-sonnet-5',
-            // The cron pipes the agent's stdout into the digest file; a --bg spawn has no pipe, so
-            // this path asks the agent to write it. Same filename GET /briefing serves.
-            prompt: 'Read ~/dev/AgentSystem/skills/daily-briefing/SKILL.md and execute it now. '
-              + 'Then write the digest with the Write tool to '
-              + '${LIFE_REPO:-$HOME/life}/briefings/<today as YYYY-MM-DD>.md, creating the '
-              + 'directory if needed, so the Mission Control Briefing tab can render it.',
+            // Jarvis: the triage spawns per-item subagents, which is an orchestration job.
+            agent: 'jarvis',
+            prompt: 'Read ~/dev/AgentSystem/skills/daily-triage/SKILL.md and execute it now.',
           })
         });
-        alert('Briefing dispatched. Session ID: ' + data.id + '\nRefresh this tab once it finishes.');
+        alert('Daily triage dispatched. Session ID: ' + data.id + '\nRefresh this tab once it finishes.');
         loadSessions();
       } catch (e) {
-        alert('Briefing dispatch failed: ' + e.message);
+        alert('Triage dispatch failed: ' + e.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = '▶ Run briefing now';
+        btn.textContent = '▶ Run daily triage now';
       }
     }
 

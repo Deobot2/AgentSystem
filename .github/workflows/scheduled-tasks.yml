@@ -20,63 +20,76 @@ on:
     - cron: '0 8 * * 1'
     # weekly-memory-decay + weekly-trust-scores + weekly-hygiene: Sunday midnight UTC
     - cron: '0 0 * * 0'
-    # daily-briefing (Life OS triage): every day 6am UTC
-    - cron: '0 6 * * *'
+    # daily-triage (Life OS stage 2): every day 7am UTC. Stage 1 (06:00) is Grok Tasks, external
+    # to this repo — see skills/daily-briefing/portable-prompt.md. The hour gap is deliberate:
+    # stage 2 reads the brief stage 1 archives to Drive.
+    - cron: '0 7 * * *'
   workflow_dispatch:
     inputs:
       job:
-        description: 'Which job to run manually (currently only daily-briefing)'
+        description: 'Which job to run manually (currently only daily-triage)'
         required: false
-        default: daily-briefing
+        default: daily-triage
 
 jobs:
-  # Life OS daily triage. Local-machine state by nature: needs the interactively-authenticated
-  # Notion/Gmail/Zoho/Calendar/Drive MCP connectors in this host's ~/.claude, so like every other
-  # job here it cannot run on a hosted runner. Weekly (Sunday) and monthly (last day) roll-ups are
-  # STEP 5 *inside* the prompt, so this one daily cron covers all three cadences — do not add
-  # separate weekly/monthly crons for them.
+  # Life OS daily triage — STAGE 2 of the daily cadence.
   #
-  # --model claude-sonnet-5 deliberately overrides Threepio's haiku default: sweeping every mail
-  # folder plus two Notion databases routinely exceeds haiku's 200K window.
-  daily-briefing:
-    if: (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') || github.event_name == 'workflow_dispatch'
+  # Stage 1 (06:00) is Grok Tasks running skills/daily-briefing/portable-prompt.md. It owns email
+  # and archives a brief (with a machine-readable `handoff:` yaml block) to Google Drive under
+  # `Life OS/briefings/`. Stage 2 does NOT re-verify that triage — it reads the handoff, covers the
+  # messaging bridges Grok cannot reach (Beeper/Discord), and executes the AI-Actionable items.
+  # If the brief is missing or stale the skill falls back to sweeping mail itself, so a missed
+  # stage 1 degrades rather than breaking.
+  #
+  # Local-machine state by nature: needs the interactively-authenticated Notion/Gmail/Zoho/
+  # Calendar/Drive MCP connectors in this host's ~/.claude, plus Beeper Desktop on localhost:23373,
+  # so like every other job here it cannot run on a hosted runner.
+  #
+  # Weekly (Sunday) and monthly (last day) roll-ups are STEP 5 *inside* stage 1's prompt, so no
+  # separate weekly/monthly crons belong here.
+  #
+  # Jarvis (opus, high effort) rather than Threepio: this run spawns per-item subagents, which is
+  # orchestration, not writing. Concurrency and item caps live in the skill, not here.
+  daily-triage:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, Linux]
+    # Generous: 10 items x up to 30min each, batched 4 at a time, plus the gather pass.
+    timeout-minutes: 180
     # Job-level so both steps below see it (step-level env does not carry across steps).
     # Where MC's GET /briefing reads from; keep in step with tools/mission-control/README.md.
     env:
       LIFE_REPO: ${{ vars.LIFE_REPO || '' }}
     steps:
-      # No checkout: the daily-briefing skill is one of the private life-OS skills gitignored by
-      # #187, so it exists only in this host's working copy — a fresh checkout would NOT contain
-      # it. $HOME/dev/AgentSystem is the stable symlink to that copy.
-      - name: Run Life OS daily briefing (Threepio) and archive the digest for Mission Control
+      # No checkout: daily-triage is one of the private life-OS skills gitignored by #187, so it
+      # exists only in this host's working copy — a fresh checkout would NOT contain it.
+      # $HOME/dev/AgentSystem is the stable symlink to that copy.
+      - name: Run Life OS daily triage (Jarvis)
         shell: bash
         run: |
           set -euo pipefail
-          skill="$HOME/dev/AgentSystem/skills/daily-briefing/SKILL.md"
+          skill="$HOME/dev/AgentSystem/skills/daily-triage/SKILL.md"
           if [ ! -f "$skill" ]; then
             echo "::error::$skill missing — the private life-OS skill is not in this host's working copy."
             exit 1
           fi
-          dir="${LIFE_REPO:-$HOME/life}/briefings"
-          mkdir -p "$dir"
-          # The skill's STEP 4 prints the digest, so capturing stdout is all the archiving MC needs
-          # — the private skill itself stays unaware of Mission Control. YYYY-MM-DD.md is the exact
-          # name GET /briefing sorts and serves; a same-day re-run overwrites, which is intended.
-          claude --agent threepio --model claude-sonnet-5 \
-            -p "Read $skill and execute it now." | tee "$dir/$(date +%F).md"
-      - name: Confirm the digest is renderable by Mission Control
+          mkdir -p "${LIFE_REPO:-$HOME/life}/closeouts"
+          # The skill writes the closeout itself (step 6) rather than this job capturing stdout:
+          # it needs the file on disk before it pushes the notification, and a --bg subagent fan-out
+          # means stdout is no longer a faithful transcript of the run.
+          claude --agent jarvis -p "Read $skill and execute it now."
+      # Loud on failure by design. A silent 07:00 no-op is the failure mode that hurts: you find out
+      # at lunch. A red workflow run emails the hub inbox, which stage 1 triages next morning — so
+      # the pipeline reports its own outage through itself.
+      - name: Confirm the closeout is renderable by Mission Control
         shell: bash
         run: |
-          dir="${LIFE_REPO:-$HOME/life}/briefings"
-          latest=$(ls "$dir" 2>/dev/null | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$' | sort | tail -1 || true)
-          if [ -z "$latest" ]; then
-            echo "::warning::No YYYY-MM-DD.md in $dir — MC /briefing will 404."
-          elif [ ! -s "$dir/$latest" ]; then
-            echo "::warning::$latest is empty — the run produced no digest (connectors offline?)."
-          else
-            echo "MC will serve: $latest"
+          dir="${LIFE_REPO:-$HOME/life}/closeouts"
+          today=$(date +%F)
+          if [ ! -s "$dir/$today.md" ]; then
+            echo "::error::$dir/$today.md missing or empty — the 07:00 triage produced no closeout."
+            exit 1
           fi
+          echo "MC will serve: $today.md"
 
   # memory-maintenance.js operates on the local ~/agent-memory brain — local machine state.
   weekly-brain-consolidation:
