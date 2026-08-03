@@ -33,6 +33,26 @@ Per-agent nodes: `nexus/agent-brain/<agent>/nodes/`.
 
 Node builtins only, idempotent. Per-repo `nexus/` brain is gitignored.
 
+### Central brain (one brain, every host)
+
+`~/agent-memory` is a checkout of the **private** repo `Zene8/agent-memory`. Every host running
+AgentSystem shares it, so a fact learned on the laptop is available to the 07:00 job on the Mission
+Control server.
+
+- New host: `bash tools/brain-join.sh` — commits that host's existing nodes first, then merges the
+  central brain in, so nothing local is lost. Idempotent; tars a pre-join backup.
+- Ongoing: `node tools/brain-sync.js` (pull, merge, commit, push) / `--status` to look only.
+
+Two things that are easy to get wrong:
+- **The brain repo is private and must stay private** — it holds user preferences, client project
+  notes, and per-agent decision logs. `Zene8/AgentSystem` is public.
+- **`graph.json` is generated, not authored.** The graph tools rewrite it whole, so two hosts
+  thinking at once conflict on it every time. `brain-sync.js` takes either side and expects
+  `graph/graph-init.js` to rebuild it from `nodes/`. Never hand-merge it.
+
+Append-only per-host logs (`session-log.jsonl`, `routing-log.jsonl`, `injection-*.jsonl`,
+`auto-capture.log`) are gitignored in the brain: they conflict on every sync and hold no facts.
+
 ## Session Naming
 
 Sessions are named automatically at exit by `hooks/session-auto-rename-hook.js` (wired as the
