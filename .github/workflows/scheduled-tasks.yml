@@ -68,6 +68,17 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: daily-triage-down
+      # Chat sources, in preference order — see chatSources() in tools/life-os-doctor.js.
+      # BEEPER_API_URL points at whichever machine runs Beeper Desktop with Remote Access on; it
+      # is a laptop, so it is asleep for a good share of 07:00 runs. MATRIX_HOMESERVER is the
+      # same account's homeserver on Beeper's own infrastructure, which is not.
+      BEEPER_API_URL: ${{ vars.BEEPER_API_URL || 'http://localhost:23373' }}
+      MATRIX_HOMESERVER: ${{ vars.MATRIX_HOMESERVER || '' }}
+      # Deliberately NOT set to 1 yet: both endpoints answer, but stage 2 has no API token and no
+      # Matrix credentials, so it still cannot actually read a message. Turning this on now would
+      # report chat as covered while nothing can read it — the exact false-green STEP 3 forbids.
+      # Flip it once the skill authenticates (#216).
+      LIFE_OS_EXPECT_BEEPER: ${{ vars.LIFE_OS_EXPECT_BEEPER || '' }}
     steps:
       # No checkout: daily-triage is one of the private life-OS skills gitignored by #187, so it
       # exists only in this host's working copy — a fresh checkout would NOT contain it.

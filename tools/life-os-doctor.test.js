@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, parseMcpList, softAlertBody, REQUIRED_CONNECTORS } from './life-os-doctor.js';
+import { evaluate, parseMcpList, softAlertBody, chatSources, REQUIRED_CONNECTORS } from './life-os-doctor.js';
 
 /** A host where everything is in place. */
 function healthyFacts(overrides = {}) {
@@ -32,7 +32,7 @@ function healthyFacts(overrides = {}) {
     todaysBrief: null,
     todaysCloseout: null,
     connectors: Object.fromEntries(REQUIRED_CONNECTORS.map((c) => [c, 'connected'])),
-    beeper: false,
+    chat: [{ name: 'Beeper Desktop API', url: 'http://localhost:23373', up: true, code: '401' }],
     ...overrides,
   };
 }
@@ -45,15 +45,6 @@ test('a healthy host has no hard and no soft gaps', () => {
   assert.equal(softGaps, 0);
 });
 
-test('an unreachable Beeper is info, never a gap', () => {
-  // SKILL.md STEP 3 documents this as the normal case on the headless host. If it ever counts as
-  // a gap, the coverage alert is open 365 days a year and stops meaning anything.
-  const { checks, softGaps } = evaluate(healthyFacts({ beeper: false }));
-  const beeper = find(checks, 'Beeper bridge (localhost:23373)');
-  assert.equal(beeper.level, 'info');
-  assert.equal(beeper.ok, false);
-  assert.equal(softGaps, 0, 'an unreachable Beeper must not be counted as a coverage gap');
-});
 
 test('a missing private skill is a hard gap and names the deploy script', () => {
   const facts = healthyFacts();
@@ -205,29 +196,72 @@ test('softAlertBody lists only soft gaps, with their fixes', () => {
   assert.doesNotMatch(body, /Beeper/, 'info-level notes must stay out of the alert');
 });
 
-test('Beeper is info by default and soft when LIFE_OS_EXPECT_BEEPER is set', () => {
-  // Default: the skill documents an unreachable bridge as normal here, so it must not alert.
-  const off = evaluate(healthyFacts({ beeper: false, expectBeeper: false }));
-  assert.equal(off.softGaps, 0);
-  assert.equal(find(off.checks, 'Beeper bridge (localhost:23373)').level, 'info');
 
-  // Once someone declares they expect it, a dead bridge is a real coverage gap.
-  const on = evaluate(healthyFacts({ beeper: false, expectBeeper: true }));
-  assert.equal(on.softGaps, 1);
-  assert.equal(find(on.checks, 'Beeper bridge (localhost:23373)').level, 'soft');
+
+
+// ── chat source chain ──────────────────────────────────────────────────────────
+
+const chat = (...s) => s;
+const src = (name, up, code = '200') => ({ name, url: `http://${name}`, up, code });
+
+test('chatSources: localhost by default, Matrix only when configured', () => {
+  const bare = chatSources({});
+  assert.equal(bare.length, 1);
+  assert.match(bare[0].url, /localhost:23373/);
+
+  const both = chatSources({ BEEPER_API_URL: 'http://100.82.195.75:23373', MATRIX_HOMESERVER: 'https://matrix.beeper.com' });
+  assert.equal(both.length, 2);
+  assert.equal(both[0].url, 'http://100.82.195.75:23373');
+  assert.match(both[1].probe, /_matrix\/client\/versions$/);
 });
 
-test('a reachable Beeper is never a gap, expected or not', () => {
-  for (const expectBeeper of [true, false]) {
-    const r = evaluate(healthyFacts({ beeper: true, expectBeeper }));
-    assert.equal(r.softGaps, 0);
-    assert.equal(find(r.checks, 'Beeper bridge (localhost:23373)').ok, true);
-  }
+test('chatSources: trailing slashes do not produce doubled paths', () => {
+  const s = chatSources({ BEEPER_API_URL: 'http://x:23373/', MATRIX_HOMESERVER: 'https://m/' });
+  assert.equal(s[0].probe, 'http://x:23373/');
+  assert.equal(s[1].probe, 'https://m/_matrix/client/versions');
 });
 
-test('an unprobed Beeper is never a gap, even when expected', () => {
-  // --hard-only declines to probe; that is not evidence the bridge is down.
-  const { checks, softGaps } = evaluate(healthyFacts({ beeper: null, expectBeeper: true }));
+test('the fallback carries coverage when the primary is down', () => {
+  // The whole point: a sleeping laptop must not read as "chat uncovered" when Beeper Cloud is up.
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: chat(src('Beeper Desktop API', false, '000'), src('Matrix homeserver', true)),
+  });
+  const { checks, softGaps } = evaluate(facts);
   assert.equal(softGaps, 0);
-  assert.equal(find(checks, 'Beeper bridge (localhost:23373)').level, 'info');
+  const cov = find(checks, 'chat coverage');
+  assert.equal(cov.ok, true);
+  assert.match(cov.detail, /using Matrix homeserver/);
+});
+
+test('every source down IS a gap once chat is expected', () => {
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: chat(src('Beeper Desktop API', false, '000'), src('Matrix homeserver', false, '000')),
+  });
+  const { checks, softGaps } = evaluate(facts);
+  assert.equal(softGaps, 1);
+  assert.equal(find(checks, 'chat coverage').level, 'soft');
+});
+
+test('every source down is only a note when chat is not expected', () => {
+  const facts = healthyFacts({ expectBeeper: false, chat: chat(src('Beeper Desktop API', false, '000')) });
+  assert.equal(evaluate(facts).softGaps, 0);
+});
+
+test('an unprobed chain is never a gap, even when expected', () => {
+  const { checks, softGaps } = evaluate(healthyFacts({ chat: null, expectBeeper: true }));
+  assert.equal(softGaps, 0);
+  assert.equal(find(checks, 'chat bridge').level, 'info');
+});
+
+test('each source is reported individually so a silent fallback is visible', () => {
+  // If only the aggregate were shown, months could pass on the fallback without anyone noticing
+  // the primary had been dead the whole time.
+  const facts = healthyFacts({
+    chat: chat(src('Beeper Desktop API', false, '000'), src('Matrix homeserver', true)),
+  });
+  const { checks } = evaluate(facts);
+  assert.equal(find(checks, 'chat: Beeper Desktop API').ok, false);
+  assert.equal(find(checks, 'chat: Matrix homeserver').ok, true);
 });

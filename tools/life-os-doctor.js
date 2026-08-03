@@ -76,7 +76,7 @@ export function gatherFacts({ hardOnly = false } = {}) {
     // declining to probe, null is a probe that ran and failed. Reporting the first as the second
     // makes --hard-only claim a coverage gap that nobody has evidence for.
     connectors: hardOnly ? 'skipped' : probeConnectors(),
-    beeper: hardOnly ? null : probeBeeper(),
+    chat: hardOnly ? null : probeChatSources(chatSources()),
     expectBeeper: /^(1|true|yes)$/i.test(process.env.LIFE_OS_EXPECT_BEEPER || ''),
   };
 }
@@ -126,11 +126,39 @@ function probeConnectors() {
   }
 }
 
-function probeBeeper() {
-  try {
-    execFileSync('curl', ['-s', '-m', '3', '-o', '/dev/null', 'http://localhost:23373/'], { stdio: 'pipe' });
-    return true;
-  } catch { return false; }
+// The chat-source chain, in preference order. Stage 2 needs exactly one of these to be up.
+//
+// Beeper Desktop's API lives in the desktop app, so it is only reachable while that machine is
+// awake — a laptop is not a 24/7 dependency you want under a 07:00 cron. matrix.beeper.com is the
+// same account's homeserver, runs on Beeper's infrastructure, and is up regardless. Anything
+// bridged via Beeper Cloud is readable there when the laptop is not.
+//
+// BEEPER_API_URL: default is localhost for a host running Beeper itself; set it to the tailnet
+// address of the machine that does (Settings -> Integrations -> Advanced -> Remote Access).
+export function chatSources(env = process.env) {
+  const sources = [];
+  const beeper = env.BEEPER_API_URL || 'http://localhost:23373';
+  sources.push({ name: 'Beeper Desktop API', url: beeper, probe: `${beeper.replace(/\/$/, '')}/` });
+  if (env.MATRIX_HOMESERVER) {
+    const hs = env.MATRIX_HOMESERVER.replace(/\/$/, '');
+    sources.push({ name: 'Matrix homeserver', url: hs, probe: `${hs}/_matrix/client/versions` });
+  }
+  return sources;
+}
+
+/**
+ * Probe each source. A source counts as up on ANY HTTP response — 401 is a healthy Beeper that
+ * simply wants its token, and treating that as down would report an outage for a bridge that is
+ * fine. Only a connection failure (curl's 000) means unreachable.
+ */
+function probeChatSources(sources) {
+  return sources.map((s) => {
+    try {
+      const code = execFileSync('curl', ['-s', '-m', '5', '-o', '/dev/null', '-w', '%{http_code}', s.probe],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      return { ...s, up: code !== '000' && code !== '', code };
+    } catch { return { ...s, up: false, code: '000' }; }
+  });
 }
 
 // ── evaluation (pure) ──────────────────────────────────────────────────────────
@@ -191,22 +219,29 @@ export function evaluate(f) {
     }
   }
 
-  // Beeper is `info` by default and `soft` once someone declares they expect it to work.
+  // Chat coverage is a chain, not a single host: stage 2 needs ANY one source up. Reported per
+  // source so a fallback silently carrying every run is visible rather than looking like health.
   //
-  // daily-triage/SKILL.md STEP 3 documents an unreachable Beeper as the normal case on this
-  // headless host, so alerting on it out of the box would fire every single day for an accepted
-  // condition — the fastest way to teach someone to ignore alerts. But "accepted" stops being true
-  // the moment the app is actually installed: from then on, silence about a dead bridge is the
-  // bug. Set LIFE_OS_EXPECT_BEEPER=1 (env, or a repo variable on the runner) to flip it.
-  // `f.beeper === null` is --hard-only declining to probe. Not probing is not evidence of a gap,
-  // so it stays `info` even when the bridge is expected.
-  add('Beeper bridge (localhost:23373)', (f.expectBeeper && f.beeper !== null) ? 'soft' : 'info', f.beeper === true,
-    f.beeper === null ? 'not probed'
-      : f.beeper ? 'reachable'
-      : f.expectBeeper ? 'unreachable — but LIFE_OS_EXPECT_BEEPER is set, so this is a real gap'
-      : 'unreachable — expected on a headless host (set LIFE_OS_EXPECT_BEEPER=1 to treat as a gap)',
-    'Needs the Beeper desktop app running on this host with its Desktop API enabled. On a headless '
-      + 'box that means GTK/audio libs + Xvfb + an interactive login — see the human-needed alert.');
+  // `info` by default and `soft` once LIFE_OS_EXPECT_BEEPER says chat is meant to work.
+  // daily-triage/SKILL.md STEP 3 documents an unreachable bridge as the normal case on this
+  // headless host, so alerting out of the box would fire daily for an accepted condition — the
+  // fastest way to teach someone to ignore alerts. Not probing (--hard-only) is never a gap.
+  if (f.chat === null) {
+    add('chat bridge', 'info', false, 'not probed', 'Re-run without --hard-only.');
+  } else {
+    const live = f.chat.filter((s) => s.up);
+    for (const s of f.chat) {
+      add(`chat: ${s.name}`, 'info', s.up,
+        s.up ? `up (${s.url}, HTTP ${s.code})` : `unreachable (${s.url})`,
+        'See #216.');
+    }
+    add('chat coverage', (f.expectBeeper && !live.length) ? 'soft' : 'info', live.length > 0,
+      live.length ? `${live.length}/${f.chat.length} source(s) up — using ${live[0].name}`
+        : f.expectBeeper ? 'no chat source reachable — stage 2 will report the channel uncovered'
+        : 'no chat source reachable (set LIFE_OS_EXPECT_BEEPER=1 to treat as a gap)',
+      'Bring up Beeper Desktop on the configured host, or set MATRIX_HOMESERVER=https://matrix.beeper.com '
+        + 'so the always-on Beeper Cloud path can cover a sleeping laptop. See #216.');
+  }
 
   const hardGaps = checks.filter((c) => c.level === 'hard' && !c.ok).length;
   const softGaps = checks.filter((c) => c.level === 'soft' && !c.ok).length;
