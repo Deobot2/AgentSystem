@@ -21,7 +21,9 @@
 # Mechanisms:
 #   agent-rule — compiled into .agents/rules/routines.generated.md (injected at SessionStart)
 #   hook       — enforced by hooks/routine-dispatch.js at runtime (no settings.json edit needed)
-#   cron       — documents a scheduled job; see the NOTE above the cron entries below
+#   cron       — a job in .github/workflows/scheduled-tasks.yml; see the NOTE below
+#   external   — runs on a platform this repo does not control (e.g. Grok Tasks). Nothing here can
+#                enforce it, so it must not be `enforce: hard` and it is exempt from cron verify.
 #
 # To add a new routine: add an entry here, then run: node tools/routines.js compile
 
@@ -90,12 +92,22 @@
   enabled: true
   action: "Before closing any GitHub issue, verify the fix landed: `node ~/dev/AgentSystem/tools/issue-close.js <n> --commit <sha>` (checks the commit is reachable from origin/main via `git merge-base --is-ancestor`, then closes with a reference comment). Never bare `gh issue close` for fix-type issues — closed-without-landed-commit caused a full re-audit (#151)."
 
-# NOTE on cron-mechanism routines: `mechanism: cron` entries are NOT auto-registered by
-# routines.js and are NOT injected into sessions — they document the scheduled jobs defined in
-# .github/workflows/scheduled-tasks.yml, which run on the self-hosted Linux runner. Change a
-# cron entry here and you must change that workflow too. (Before the Linux migration these
-# were Windows Task Scheduler jobs created by tools/setup-scheduled-tasks.ps1.)
+# NOTE on cron-mechanism routines: `mechanism: cron` entries are NOT injected into sessions — they
+# document jobs defined in .github/workflows/scheduled-tasks.yml, which run on the self-hosted
+# Linux runner. Change a cron entry here and you must change that workflow too.
+#
+# `node tools/routines.js verify` (or `compile --verify`) now cross-checks both directions of that
+# contract — the job exists, and its cron expression matches — and exits 1 when it does not. Add
+# `workflow_job:` when the job name differs from the routine id. This check exists because four
+# `enforce: hard` cron routines sat unregistered for weeks while `compile` printed "register via
+# Task Scheduler manually or via setup-scheduled-tasks.ps1" on a Linux host (#200). The compile
+# step lying about enforcement was the defect; the dead routines were the symptom.
 
+# NO WORKFLOW JOB EXISTS FOR THIS ONE. `routines.js compile --verify` fails on it by design and
+# will keep failing until a human decides which way to resolve it — adding a Saturday job to
+# scheduled-tasks.yml means committing to a weekly headless model run, which is a cost decision,
+# not a mechanical fix. The alternative is `node tools/routines.js disable weekly-agent-review`.
+# Leaving it enforce:hard-and-unregistered is the #200 defect, so it is tracked, not hidden.
 - id: weekly-agent-review
   description: Saturday agent fleet review (goal scorecard, risk scan, agent performance)
   trigger: schedule
@@ -110,6 +122,7 @@
   description: Monday brain consolidation (full memory sleep cycle + reflection)
   trigger: schedule
   mechanism: cron
+  workflow_job: weekly-brain-consolidation
   schedule: "0 8 * * 1"
   task_name: AgentSystem-WeeklyBrainConsolidation
   enforce: hard
@@ -120,6 +133,7 @@
   description: Sunday visit_count decay across personal-brain and agentsystem graphs
   trigger: schedule
   mechanism: cron
+  workflow_job: weekly-memory-decay
   schedule: "0 0 * * 0"
   task_name: AgentSystem-WeeklyMemoryDecay
   enforce: hard
@@ -127,21 +141,48 @@
   action: "Weekly memory decay: node ~/dev/AgentSystem/tools/memory-decay.js --brain=agentsystem then --brain=personal-brain. Keeps BM25 retrieval weights fresh by decaying stale visit counts."
 
 - id: weekly-trust-scores
-  description: Saturday trust-score aggregation from agent-dispatch run logs
+  description: Sunday trust-score aggregation from agent-dispatch run logs
   trigger: schedule
   mechanism: cron
-  schedule: "0 8 * * 6"
+  workflow_job: weekly-trust-scores
+  # Sunday 00:00, matching the `weekly-trust-scores` job in scheduled-tasks.yml. This said
+  # "0 8 * * 6" (Saturday 08:00) while the workflow ran it Sunday midnight — `routines.js compile
+  # --verify` now fails on exactly that kind of mismatch.
+  schedule: "0 0 * * 0"
   task_name: AgentSystem-WeeklyTrustScores
   enforce: hard
   enabled: true
   action: "Weekly trust scores: node ~/dev/AgentSystem/tools/compute-trust-scores.js — aggregates ~/agent-memory/nexus/run-log/*.json into trust-scores.md (read by leads before delegation)."
 
+# ── Life OS daily cadence: two stages, one of which is not ours ────────────────────────────────
+#
+# STAGE 1 (06:00) runs in Grok Tasks, external to this repo and this host — it is `mechanism:
+# external`, not `cron`, precisely so `compile --verify` does not look for a workflow job that will
+# never exist. It owns mail and calendar and archives a brief with a machine-readable `handoff:`
+# block. This entry documents the contract stage 2 depends on; changing it means changing
+# skills/daily-briefing/portable-prompt.md, which is what Grok actually runs.
+#
+# STAGE 2 (07:00) is ours: the `daily-triage` job in scheduled-tasks.yml.
 - id: daily-briefing
-  description: Daily Life OS triage — mail to Notion Tasks + drafts, digest archived for Mission Control
+  description: Stage 1 (06:00, external Grok Tasks) — mail + calendar triage, brief archived to Drive and disk
+  trigger: schedule
+  mechanism: external
+  schedule: "0 6 * * *"
+  task_name: GrokTasks-DailyBriefing
+  # `soft`, not `hard`: nothing in this repo can enforce a job running on someone else's platform.
+  # Claiming otherwise is the exact "reports as enforced, cannot fire" defect from #200/#204.
+  # Stage 2 detects a missing or stale brief and falls back, so a missed stage 1 degrades.
+  enforce: soft
+  enabled: true
+  action: "Stage 1 is a Grok Task, not a local cron — nothing here launches it. Prompt: skills/daily-briefing/portable-prompt.md. Its step 5 chains the Sunday weekly + last-day monthly roll-ups, so there are no separate weekly/monthly crons. Brief goes to Drive `Life OS/briefings/YYYY-MM-DD` AND ${LIFE_REPO:-$HOME/life}/briefings/YYYY-MM-DD.md — the exact name MC's /briefing tab serves and stage 2 reads."
+
+- id: daily-triage
+  description: Stage 2 (07:00) — read stage 1's handoff, cover Beeper/Discord/GitHub, execute AI-actionable items as draft PRs, write the closeout
   trigger: schedule
   mechanism: cron
-  schedule: "0 6 * * *"
-  task_name: AgentSystem-DailyBriefing
+  workflow_job: daily-triage
+  schedule: "0 7 * * *"
+  task_name: AgentSystem-DailyTriage
   enforce: hard
   enabled: true
-  action: "Life OS daily triage as Threepio, --model claude-sonnet-5 override: follow ~/dev/AgentSystem/skills/daily-briefing/SKILL.md (gitignored, local copy only), SAFETY included. Its step 5 chains the Sunday weekly + last-day monthly roll-ups — no separate crons. Digest goes to Drive `Life OS/briefings/YYYY-MM-DD` AND ${LIFE_REPO:-$HOME/life}/briefings/YYYY-MM-DD.md (the exact name MC's /briefing tab serves)."
+  action: "Life OS stage 2 as Jarvis: follow ~/dev/AgentSystem/skills/daily-triage/SKILL.md (gitignored, local copy only). Draft PRs only, never merge, never push to main, never send mail. Verify preconditions first with `node ~/dev/AgentSystem/tools/life-os-doctor.js`; blocking gaps raise a `human-needed` issue instead of failing silently. Must write ${LIFE_REPO:-$HOME/life}/closeouts/YYYY-MM-DD.md — the workflow fails the run without it."

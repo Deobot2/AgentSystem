@@ -2216,6 +2216,49 @@
 [2026-07-12T22:06:58.370Z] [SUCCESS] [sync-agents.js] Command: rename-session.md -> C:\Users\natha\.claude\commands
 [2026-07-12T22:06:58.590Z] [SUCCESS] [sync-agents.js] Antigravity: installed plugin via agy
 [2026-07-12T22:06:58.591Z] [SUCCESS] [sync-agents.js] Sync complete -- Claude: 12, Antigravity: 12
+[2026-07-29T04:43:56.136Z] [INFO] [sync-agents.js] Starting cross-platform agent sync...
+[2026-07-29T04:43:56.137Z] [INFO] [sync-agents.js] Syncing: astra
+[2026-07-29T04:43:56.138Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/astra.md
+[2026-07-29T04:43:56.138Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/astra.md
+[2026-07-29T04:43:56.139Z] [INFO] [sync-agents.js] Syncing: clarification-needed
+[2026-07-29T04:43:56.139Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/clarification-needed.md
+[2026-07-29T04:43:56.139Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/clarification-needed.md
+[2026-07-29T04:43:56.139Z] [INFO] [sync-agents.js] Syncing: friday
+[2026-07-29T04:43:56.140Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/friday.md
+[2026-07-29T04:43:56.141Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/friday.md
+[2026-07-29T04:43:56.141Z] [INFO] [sync-agents.js] Syncing: jarvis
+[2026-07-29T04:43:56.141Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/jarvis.md
+[2026-07-29T04:43:56.142Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/jarvis.md
+[2026-07-29T04:43:56.142Z] [INFO] [sync-agents.js] Syncing: leo
+[2026-07-29T04:43:56.142Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/leo.md
+[2026-07-29T04:43:56.142Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/leo.md
+[2026-07-29T04:43:56.142Z] [INFO] [sync-agents.js] Syncing: nat
+[2026-07-29T04:43:56.142Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/nat.md
+[2026-07-29T04:43:56.142Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/nat.md
+[2026-07-29T04:43:56.143Z] [INFO] [sync-agents.js] Syncing: pym
+[2026-07-29T04:43:56.143Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/pym.md
+[2026-07-29T04:43:56.143Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/pym.md
+[2026-07-29T04:43:56.143Z] [INFO] [sync-agents.js] Syncing: r2d2
+[2026-07-29T04:43:56.143Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/r2d2.md
+[2026-07-29T04:43:56.143Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/r2d2.md
+[2026-07-29T04:43:56.144Z] [INFO] [sync-agents.js] Syncing: sam
+[2026-07-29T04:43:56.144Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/sam.md
+[2026-07-29T04:43:56.145Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/sam.md
+[2026-07-29T04:43:56.145Z] [INFO] [sync-agents.js] Syncing: threepio
+[2026-07-29T04:43:56.145Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/threepio.md
+[2026-07-29T04:43:56.145Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/threepio.md
+[2026-07-29T04:43:56.145Z] [INFO] [sync-agents.js] Syncing: ultron
+[2026-07-29T04:43:56.145Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/ultron.md
+[2026-07-29T04:43:56.145Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/ultron.md
+[2026-07-29T04:43:56.146Z] [INFO] [sync-agents.js] Syncing: wanda
+[2026-07-29T04:43:56.146Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/wanda.md
+[2026-07-29T04:43:56.146Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/wanda.md
+[2026-07-29T04:43:56.146Z] [SUCCESS] [sync-agents.js] Config: routines.yml -> /home/basely/.claude/agents/config
+[2026-07-29T04:43:56.146Z] [SUCCESS] [sync-agents.js] Config: routing.yml -> /home/basely/.claude/agents/config
+[2026-07-29T04:43:56.147Z] [SUCCESS] [sync-agents.js] Command: onboard-memory.md -> /home/basely/.claude/commands
+[2026-07-29T04:43:56.147Z] [SUCCESS] [sync-agents.js] Command: rename-session.md -> /home/basely/.claude/commands
+[2026-07-29T04:43:56.240Z] [SUCCESS] [sync-agents.js] Antigravity: installed plugin via agy
+[2026-07-29T04:43:56.240Z] [SUCCESS] [sync-agents.js] Sync complete -- Claude: 12, Antigravity: 12
 [2026-07-29T05:16:15.994Z] [INFO] [sync-agents.js] Starting cross-platform agent sync...
 [2026-07-29T05:16:15.997Z] [INFO] [sync-agents.js] Syncing: astra
 [2026-07-29T05:16:15.999Z] [SUCCESS] [sync-agents.js] Claude: /home/nathan/.claude/agents/astra.md
@@ -2259,3 +2302,125 @@
 [2026-07-29T05:16:16.025Z] [SUCCESS] [sync-agents.js] Command: rename-session.md -> /home/nathan/.claude/commands
 [2026-07-29T05:16:16.590Z] [SUCCESS] [sync-agents.js] Antigravity: installed plugin via agy
 [2026-07-29T05:16:16.591Z] [SUCCESS] [sync-agents.js] Sync complete -- Claude: 12, Antigravity: 12
+[2026-08-03T19:17:06.133Z] [INFO] [sync-agents.js] Starting cross-platform agent sync...
+[2026-08-03T19:17:06.135Z] [INFO] [sync-agents.js] Syncing: astra
+[2026-08-03T19:17:06.135Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/astra.md
+[2026-08-03T19:17:06.136Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/astra.md
+[2026-08-03T19:17:06.136Z] [INFO] [sync-agents.js] Syncing: clarification-needed
+[2026-08-03T19:17:06.136Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/clarification-needed.md
+[2026-08-03T19:17:06.137Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/clarification-needed.md
+[2026-08-03T19:17:06.137Z] [INFO] [sync-agents.js] Syncing: friday
+[2026-08-03T19:17:06.138Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/friday.md
+[2026-08-03T19:17:06.138Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/friday.md
+[2026-08-03T19:17:06.139Z] [INFO] [sync-agents.js] Syncing: jarvis
+[2026-08-03T19:17:06.139Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/jarvis.md
+[2026-08-03T19:17:06.139Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/jarvis.md
+[2026-08-03T19:17:06.139Z] [INFO] [sync-agents.js] Syncing: leo
+[2026-08-03T19:17:06.139Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/leo.md
+[2026-08-03T19:17:06.140Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/leo.md
+[2026-08-03T19:17:06.140Z] [INFO] [sync-agents.js] Syncing: nat
+[2026-08-03T19:17:06.140Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/nat.md
+[2026-08-03T19:17:06.141Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/nat.md
+[2026-08-03T19:17:06.141Z] [INFO] [sync-agents.js] Syncing: pym
+[2026-08-03T19:17:06.141Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/pym.md
+[2026-08-03T19:17:06.141Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/pym.md
+[2026-08-03T19:17:06.141Z] [INFO] [sync-agents.js] Syncing: r2d2
+[2026-08-03T19:17:06.141Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/r2d2.md
+[2026-08-03T19:17:06.141Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/r2d2.md
+[2026-08-03T19:17:06.142Z] [INFO] [sync-agents.js] Syncing: sam
+[2026-08-03T19:17:06.142Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/sam.md
+[2026-08-03T19:17:06.142Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/sam.md
+[2026-08-03T19:17:06.142Z] [INFO] [sync-agents.js] Syncing: threepio
+[2026-08-03T19:17:06.143Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/threepio.md
+[2026-08-03T19:17:06.143Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/threepio.md
+[2026-08-03T19:17:06.143Z] [INFO] [sync-agents.js] Syncing: ultron
+[2026-08-03T19:17:06.143Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/ultron.md
+[2026-08-03T19:17:06.143Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/ultron.md
+[2026-08-03T19:17:06.143Z] [INFO] [sync-agents.js] Syncing: wanda
+[2026-08-03T19:17:06.143Z] [SUCCESS] [sync-agents.js] Claude: /home/basely/.claude/agents/wanda.md
+[2026-08-03T19:17:06.144Z] [SUCCESS] [sync-agents.js] Antigravity: /home/basely/.gemini/agentsystem-plugin/agents/wanda.md
+[2026-08-03T19:17:06.144Z] [SUCCESS] [sync-agents.js] Config: routines.yml -> /home/basely/.claude/agents/config
+[2026-08-03T19:17:06.144Z] [SUCCESS] [sync-agents.js] Config: routing.yml -> /home/basely/.claude/agents/config
+[2026-08-03T19:17:06.144Z] [SUCCESS] [sync-agents.js] Command: onboard-memory.md -> /home/basely/.claude/commands
+[2026-08-03T19:17:06.144Z] [SUCCESS] [sync-agents.js] Command: rename-session.md -> /home/basely/.claude/commands
+[2026-08-03T19:17:06.240Z] [SUCCESS] [sync-agents.js] Antigravity: installed plugin via agy
+[2026-08-03T19:17:06.240Z] [SUCCESS] [sync-agents.js] Sync complete -- Claude: 12, Antigravity: 12
+[2026-08-03T19:19:07.344Z] [INFO] [sync-agents.js] Checking agent drift (repo vs installed) — no files will be written...
+[2026-08-03T19:19:07.345Z] [INFO] [sync-agents.js] Syncing: astra
+[2026-08-03T19:19:07.345Z] [INFO] [sync-agents.js] same astra
+[2026-08-03T19:19:07.345Z] [INFO] [sync-agents.js] Syncing: clarification-needed
+[2026-08-03T19:19:07.345Z] [INFO] [sync-agents.js] same clarification-needed
+[2026-08-03T19:19:07.346Z] [INFO] [sync-agents.js] Syncing: friday
+[2026-08-03T19:19:07.347Z] [INFO] [sync-agents.js] same friday
+[2026-08-03T19:19:07.347Z] [INFO] [sync-agents.js] Syncing: jarvis
+[2026-08-03T19:19:07.347Z] [INFO] [sync-agents.js] same jarvis
+[2026-08-03T19:19:07.347Z] [INFO] [sync-agents.js] Syncing: leo
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] same leo
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] Syncing: nat
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] same nat
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] Syncing: pym
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] same pym
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] Syncing: r2d2
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] same r2d2
+[2026-08-03T19:19:07.348Z] [INFO] [sync-agents.js] Syncing: sam
+[2026-08-03T19:19:07.349Z] [INFO] [sync-agents.js] same sam
+[2026-08-03T19:19:07.349Z] [INFO] [sync-agents.js] Syncing: threepio
+[2026-08-03T19:19:07.349Z] [INFO] [sync-agents.js] same threepio
+[2026-08-03T19:19:07.349Z] [INFO] [sync-agents.js] Syncing: ultron
+[2026-08-03T19:19:07.350Z] [INFO] [sync-agents.js] same ultron
+[2026-08-03T19:19:07.350Z] [INFO] [sync-agents.js] Syncing: wanda
+[2026-08-03T19:19:07.350Z] [INFO] [sync-agents.js] same wanda
+[2026-08-03T19:19:07.350Z] [SUCCESS] [sync-agents.js] in sync — all 12 installed agent definitions match the repo
+[2026-08-03T19:19:07.385Z] [INFO] [sync-agents.js] Checking agent drift (repo vs installed) — no files will be written...
+[2026-08-03T19:19:07.386Z] [INFO] [sync-agents.js] Syncing: astra
+[2026-08-03T19:19:07.387Z] [INFO] [sync-agents.js] same astra
+[2026-08-03T19:19:07.387Z] [INFO] [sync-agents.js] Syncing: clarification-needed
+[2026-08-03T19:19:07.387Z] [INFO] [sync-agents.js] same clarification-needed
+[2026-08-03T19:19:07.388Z] [INFO] [sync-agents.js] Syncing: friday
+[2026-08-03T19:19:07.389Z] [INFO] [sync-agents.js] same friday
+[2026-08-03T19:19:07.389Z] [INFO] [sync-agents.js] Syncing: jarvis
+[2026-08-03T19:19:07.390Z] [INFO] [sync-agents.js] same jarvis
+[2026-08-03T19:19:07.390Z] [INFO] [sync-agents.js] Syncing: leo
+[2026-08-03T19:19:07.390Z] [ERROR] [sync-agents.js] DRIFT leo: installed copy differs from what sync would write
+[2026-08-03T19:19:07.390Z] [INFO] [sync-agents.js] Syncing: nat
+[2026-08-03T19:19:07.391Z] [INFO] [sync-agents.js] same nat
+[2026-08-03T19:19:07.391Z] [INFO] [sync-agents.js] Syncing: pym
+[2026-08-03T19:19:07.391Z] [INFO] [sync-agents.js] same pym
+[2026-08-03T19:19:07.391Z] [INFO] [sync-agents.js] Syncing: r2d2
+[2026-08-03T19:19:07.391Z] [INFO] [sync-agents.js] same r2d2
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] Syncing: sam
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] same sam
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] Syncing: threepio
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] same threepio
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] Syncing: ultron
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] same ultron
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] Syncing: wanda
+[2026-08-03T19:19:07.392Z] [INFO] [sync-agents.js] same wanda
+[2026-08-03T19:19:07.392Z] [ERROR] [sync-agents.js] 1 of 12 installed agent(s) differ from the repo: leo
+[2026-08-03T19:19:07.392Z] [ERROR] [sync-agents.js] Run `node tools/sync-agents.js` to bring them in step.
+[2026-08-03T19:19:07.431Z] [INFO] [sync-agents.js] Checking agent drift (repo vs installed) — no files will be written...
+[2026-08-03T19:19:07.432Z] [INFO] [sync-agents.js] Syncing: astra
+[2026-08-03T19:19:07.433Z] [INFO] [sync-agents.js] same astra
+[2026-08-03T19:19:07.433Z] [INFO] [sync-agents.js] Syncing: clarification-needed
+[2026-08-03T19:19:07.433Z] [INFO] [sync-agents.js] same clarification-needed
+[2026-08-03T19:19:07.433Z] [INFO] [sync-agents.js] Syncing: friday
+[2026-08-03T19:19:07.434Z] [INFO] [sync-agents.js] same friday
+[2026-08-03T19:19:07.434Z] [INFO] [sync-agents.js] Syncing: jarvis
+[2026-08-03T19:19:07.435Z] [INFO] [sync-agents.js] same jarvis
+[2026-08-03T19:19:07.435Z] [INFO] [sync-agents.js] Syncing: leo
+[2026-08-03T19:19:07.435Z] [INFO] [sync-agents.js] same leo
+[2026-08-03T19:19:07.435Z] [INFO] [sync-agents.js] Syncing: nat
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] same nat
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] Syncing: pym
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] same pym
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] Syncing: r2d2
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] same r2d2
+[2026-08-03T19:19:07.436Z] [INFO] [sync-agents.js] Syncing: sam
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] same sam
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] Syncing: threepio
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] same threepio
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] Syncing: ultron
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] same ultron
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] Syncing: wanda
+[2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] same wanda
+[2026-08-03T19:19:07.437Z] [SUCCESS] [sync-agents.js] in sync — all 12 installed agent definitions match the repo

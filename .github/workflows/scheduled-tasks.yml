@@ -55,35 +55,104 @@ jobs:
     runs-on: [self-hosted, Linux]
     # Generous: 10 items x up to 30min each, batched 4 at a time, plus the gather pass.
     timeout-minutes: 180
-    # Job-level so both steps below see it (step-level env does not carry across steps).
-    # Where MC's GET /briefing reads from; keep in step with tools/mission-control/README.md.
+    # tools/human-needed.js opens/closes the `human-needed` tracking issue from the preflight and
+    # cleanup steps below.
+    permissions:
+      issues: write
+    # Job-level so every step sees it (step-level env does not carry across steps).
+    # LIFE_REPO: where MC's GET /briefing reads from; keep in step with tools/mission-control/README.md.
+    # ALERT_KEY: one key for "the daily triage is not working", shared with
+    # daily-triage-watchdog.yml on purpose — two keys would mean two issues for one outage.
     env:
       LIFE_REPO: ${{ vars.LIFE_REPO || '' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: daily-triage-down
     steps:
       # No checkout: daily-triage is one of the private life-OS skills gitignored by #187, so it
       # exists only in this host's working copy — a fresh checkout would NOT contain it.
-      # $HOME/dev/AgentSystem is the stable symlink to that copy.
-      - name: Run Life OS daily triage (Jarvis)
+      #
+      # REPO is resolved rather than hardcoded to $HOME/dev/AgentSystem: that symlink is an
+      # invariant this repo asserts in several places but nothing creates or verifies, and when it
+      # was absent the job died here every morning for days with no alert anywhere. Fall back to
+      # the real checkout so a missing symlink degrades to a warning instead of an outage.
+      - name: Resolve the working copy
+        id: repo
         shell: bash
         run: |
           set -euo pipefail
-          skill="$HOME/dev/AgentSystem/skills/daily-triage/SKILL.md"
-          if [ ! -f "$skill" ]; then
-            echo "::error::$skill missing — the private life-OS skill is not in this host's working copy."
-            echo "::error::Ship it from the authoring machine: bash tools/deploy-private-skills.sh --host <user@$(hostname)>"
+          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem"; do
+            if [ -d "$candidate/tools" ]; then
+              echo "repo=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Using $candidate"
+              [ "$candidate" = "$HOME/dev/AgentSystem" ] || \
+                echo "::warning::$HOME/dev/AgentSystem is missing; fell back to $candidate. Recreate it — config/routines.yml and the installed hooks all invoke tools through that path."
+              exit 0
+            fi
+          done
+          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem or $HOME/AgentSystem."
+          exit 1
+
+      # Preflight before the model call, not inside it: every precondition is host state only a
+      # human can fix (ship a gitignored file, authenticate a connector), so a blocked run should
+      # cost nothing and say exactly what is wrong.
+      #
+      # The checks live in tools/life-os-doctor.js rather than in this YAML because they are worth
+      # unit-testing and worth running by hand — `node tools/life-os-doctor.js` is the one command
+      # that answers "can tomorrow's run work". It exits non-zero on blocking gaps only; missing
+      # connectors degrade coverage and raise their own alert without failing the run.
+      - name: Preflight — daily-triage doctor
+        id: preflight
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          set -uo pipefail
+          mkdir -p "${LIFE_REPO:-$HOME/life}/briefings" "${LIFE_REPO:-$HOME/life}/closeouts"
+          if ! node "$REPO/tools/life-os-doctor.js" --alert; then
+            echo "::error::daily-triage preflight found blocking gaps — see the table above."
+            action=$(cat <<EOF
+          Run \`node tools/life-os-doctor.js\` on \`$(hostname)\` for the full table; each failing
+          check prints its own fix. The usual cause is the private life-OS skills being absent:
+          they are gitignored (#187), so they exist only on the machine where they were authored
+          and git will never carry them here. From that machine:
+
+          \`\`\`bash
+          bash tools/deploy-private-skills.sh --host $(whoami)@$(hostname)
+          bash tools/deploy-private-skills.sh --host $(whoami)@$(hostname) --check
+          \`\`\`
+
+          Then confirm end to end with \`gh workflow run scheduled-tasks.yml -f job=daily-triage\`.
+          This issue closes itself on the next successful run.
+          EOF
+            )
+            node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
+              --title "[Life OS]: the 07:00 daily triage cannot run" \
+              --why "Preflight on \`$(hostname)\` found blocking gaps. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for the doctor's table." \
+              --action "$action" \
+              || echo "::warning::could not raise the human-needed alert"
             exit 1
           fi
-          mkdir -p "${LIFE_REPO:-$HOME/life}/closeouts"
+
+      - name: Run Life OS daily triage (Jarvis)
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          set -euo pipefail
           # The skill writes the closeout itself (step 6) rather than this job capturing stdout:
           # it needs the file on disk before it pushes the notification, and a --bg subagent fan-out
           # means stdout is no longer a faithful transcript of the run.
-          claude --agent jarvis -p "Read $skill and execute it now."
+          claude --agent jarvis -p "Read $REPO/skills/daily-triage/SKILL.md and execute it now."
+
       # Loud on failure by design. A silent 07:00 no-op is the failure mode that hurts: you find out
-      # at lunch. A red workflow run emails the hub inbox, which stage 1 triages next morning — so
-      # the pipeline reports its own outage through itself.
+      # at lunch. A red run alone was not enough — it emails the hub inbox, which stage 1 triages the
+      # *next* morning, so the pipeline reported its own outage a day late and four consecutive
+      # failures went unnoticed. The human-needed issue is the out-of-band channel.
       - name: Confirm the closeout is renderable by Mission Control
         shell: bash
         run: |
+          set -uo pipefail
           dir="${LIFE_REPO:-$HOME/life}/closeouts"
           today=$(date +%F)
           if [ ! -s "$dir/$today.md" ]; then
@@ -91,6 +160,33 @@ jobs:
             exit 1
           fi
           echo "MC will serve: $today.md"
+
+      # Only on a fully green run: the closeout exists, so MC has something to serve and the
+      # outage really is over. `if: success()` rather than `always()` for exactly that reason.
+      - name: Clear the human-needed alert
+        if: success()
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          node "$REPO/tools/human-needed.js" resolve "$ALERT_KEY" \
+            --comment "Daily triage completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ) and wrote today's closeout." \
+            || echo "::warning::could not clear the human-needed alert"
+
+      # Catches the failures the preflight cannot predict — the model run erroring, an MCP
+      # connector unauthenticated, the closeout never written. Without this, a failure *after*
+      # preflight produced only a red run.
+      - name: Raise the human-needed alert (run failed)
+        if: failure() && steps.preflight.outcome == 'success'
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
+            --title "[Life OS]: the 07:00 daily triage is failing" \
+            --why "Preflight passed but the run failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." \
+            --action "Read the run log. The usual causes are an expired interactive MCP connector (Notion/Gmail/Calendar/Drive) in this host's \`~/.claude\`, Beeper Desktop not listening on localhost:23373, or the skill erroring before it wrote the closeout. Re-run with \`gh workflow run scheduled-tasks.yml -f job=daily-triage\` once fixed; this issue closes itself on the next successful run." \
+            || echo "::warning::could not raise the human-needed alert"
 
   # memory-maintenance.js operates on the local ~/agent-memory brain — local machine state.
   weekly-brain-consolidation:

@@ -2,7 +2,12 @@
 
 ## Agents
 - Edit `.agents/agents/<name>.md`, then `node tools/sync-agents.js` (all platforms).
-- Verify: `.agents/sync.log`, grep ERROR.
+- Verify: `node tools/sync-agents.js --check` (exit 1 on drift, writes nothing), or
+  `.agents/sync.log`, grep ERROR.
+- **Never** verify with `diff .agents/agents/<a>.md ~/.claude/agents/<a>.md`. The source holds
+  empty `<!-- SHARED:x -->` marker pairs that the sync expands from `.agents/rules/shared-blocks.md`,
+  so that diff is never empty even when in step. Reading it as "installed copies are ahead of the
+  repo" produced #195, a high-priority overwrite hazard that did not exist.
 - Code-location searches ("where is X defined", "what calls Y"): use
   `caveman:cavecrew-investigator`, not `Explore` — same result, ~60% less caller context (#164).
 
@@ -42,18 +47,71 @@ by markers in `~/.claude/cache/session-autorename/`. Results land in
 `~/agent-memory/nexus/session-autorename.log`; the worker verifies the registry actually changed
 rather than trusting exit code 0.
 
-**Never compare `pathToFileURL(process.argv[1])` to `import.meta.url` without realpath'ing
-argv[1]** — `import.meta.url` is always symlink-resolved. `~/dev/AgentSystem` is a symlink to the
-real checkout, so that check silently disabled `session-namer.js` for every production caller
-(exit 0, zero work). Guarded by `tools/session-namer-symlink.test.js`.
+## Is-main checks
+
+**Never hand-roll "am I the entry point?".** Use:
+```js
+import { isMainModule } from './is-main.js';
+if (isMainModule(import.meta.url)) main();
+```
+`import.meta.url` is always symlink-resolved; `process.argv[1]` is not. `~/dev/AgentSystem` is a
+symlink to the real checkout and is the path `config/routines.yml`, the installed hooks and the
+docs all tell callers to use — so any comparison that skips `realpathSync(argv[1])` is false in
+production and `main()` never runs. Exit 0, zero work, no error. It hit `session-namer.js` first
+(#158 era), then sat in **25 other tools** until fixed fleet-wide, because that fix was a local
+edit instead of a shared helper. `tools/is-main.test.js` now fails the build if any tool compares
+`process.argv[1]` to `import.meta.url` itself.
 
 ## Routines
 `config/routines.yml`, enforced hard by default. New routine: add entry with `id`, `description`,
-`trigger`, `mechanism` (`agent-rule`|`hook`|`cron`), `enforce: hard`, `enabled: true`, `action`;
-then `node tools/routines.js compile` to regenerate `.agents/rules/routines.generated.md`.
-Bypass without editing: `node tools/routines.js bypass <id>`.
+`trigger`, `mechanism` (`agent-rule`|`hook`|`cron`|`external`), `enforce: hard`, `enabled: true`,
+`action`; then `node tools/routines.js compile` to regenerate
+`.agents/rules/routines.generated.md`. Bypass without editing: `node tools/routines.js bypass <id>`.
 **`action:` text is injected every session — keep it terse.**
+
+- `mechanism: cron` **must** have a matching job in `.github/workflows/scheduled-tasks.yml`, with
+  the same cron expression. Add `workflow_job:` when the job name differs from the routine id.
+- `node tools/routines.js verify` (or `compile --verify`) cross-checks that and exits 1 on a
+  mismatch. Four `enforce: hard` cron routines once sat unregistered for weeks while `compile`
+  printed Windows Task Scheduler instructions on a Linux host (#200) — the compile step lying
+  about enforcement was the defect, the dead routines were the symptom.
+- `mechanism: external` is for jobs on platforms this repo does not control (Life OS stage 1 runs
+  in Grok Tasks). It must not be `enforce: hard` — nothing here can enforce it — and it is exempt
+  from cron verify.
+
 See `docs/memory-and-routing-redesign.md` → "Routines engine".
+
+## Life OS daily cadence
+
+Two stages. **Stage 1 (06:00)** is a Grok Task, external to this repo: it triages mail/calendar and
+archives a brief with a machine-readable `handoff:` block. **Stage 2 (07:00)** is the `daily-triage`
+job in `scheduled-tasks.yml` — Jarvis reads that handoff, covers Beeper/Discord/GitHub, executes
+AI-actionable items as **draft PRs only**, and writes `$LIFE_REPO/closeouts/YYYY-MM-DD.md`, which
+Mission Control's `GET /briefing` serves.
+
+- **Is it healthy?** `node tools/life-os-doctor.js`. Hard gaps fail the 07:00 preflight; soft gaps
+  (an unauthenticated MCP connector) degrade coverage without failing the run. `--hard-only` skips
+  the network probes; `--alert` opens/closes the coverage issue.
+- **The skills are gitignored** (#187) and git will never carry them. Ship them from the machine
+  that has them: `bash tools/deploy-private-skills.sh --host <user@host>`.
+- Stage 2 needs `~/dev/AgentSystem` to exist — the skill's GitHub sweep runs there.
+- A missed or failed run raises a `human-needed` issue from two directions: the job itself, and
+  `daily-triage-watchdog.yml` on GitHub-hosted infra, so a dead self-hosted runner cannot hide the
+  outage. Both use the key `daily-triage-down`, so one outage is one issue. A successful run closes
+  it. Four consecutive silent failures went unnoticed before this existed.
+
+## Human-needed alerts
+
+When an agent or job is blocked on something only a person can do, raise it — do not just fail:
+```bash
+node tools/human-needed.js raise <stable-key> --title "..." --why "..." --action "..."
+node tools/human-needed.js resolve <stable-key>
+node tools/human-needed.js list
+```
+It opens one GitHub issue labelled `human-needed` per key, keyed by a marker in the body (not the
+title, which humans edit). Re-raising an open alert comments instead of duplicating, at most once
+per 20h, so a daily job neither opens 365 issues nor goes quiet. GitHub is the channel because it
+already emails and survives a host reboot; there is no push endpoint on the webhook server.
 
 ## Path-Scoped Rules
 

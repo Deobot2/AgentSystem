@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRoutinesYml, dispatchRoutines } from './routines.js';
+import { readFileSync } from 'node:fs';
+import { parseRoutinesYml, dispatchRoutines, verifyCronRoutines } from './routines.js';
 
 // --- parseRoutinesYml ---
 
@@ -127,4 +128,104 @@ test('parseRoutinesYml filter: disabled routine not included', () => {
   // always-worktree is enabled, disabled-rule is not
   assert.strictEqual(matched.length, 1);
   assert.strictEqual(matched[0].id, 'always-worktree');
+});
+
+// --- verifyCronRoutines (#200) ---
+//
+// The defect being guarded: `compile` reported four `enforce: hard` cron routines as enforced
+// while nothing on the host could fire them. These tests pin the contract in both directions —
+// the job must exist, and its cron must match — because a routine whose schedule silently
+// disagrees with the workflow is as dead as one with no job at all.
+
+const WORKFLOW = `
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+    - cron: '0 0 * * 0'
+    - cron: '0 7 * * *'
+jobs:
+  daily-triage:
+    runs-on: [self-hosted, Linux]
+  weekly-brain-consolidation:
+    runs-on: [self-hosted, Linux]
+  weekly-memory-decay:
+    runs-on: [self-hosted, Linux]
+`;
+
+const cron = (over = {}) => [{
+  id: 'daily-triage', mechanism: 'cron', enabled: true, enforce: 'hard', schedule: '0 7 * * *', ...over,
+}];
+
+test('verifyCronRoutines: a matching job and schedule is clean', () => {
+  assert.deepEqual(verifyCronRoutines(cron(), { workflowText: WORKFLOW }), []);
+});
+
+test('verifyCronRoutines: a missing job is an error naming the routine', () => {
+  const p = verifyCronRoutines(cron({ id: 'weekly-agent-review', schedule: '0 9 * * 6' }), { workflowText: WORKFLOW });
+  assert.equal(p.length, 1);
+  assert.equal(p[0].severity, 'error');
+  assert.equal(p[0].id, 'weekly-agent-review');
+  assert.match(p[0].detail, /no job named/);
+});
+
+test('verifyCronRoutines: a schedule that disagrees with the workflow is an error', () => {
+  // The real case: weekly-trust-scores said Saturday 08:00 while the job ran Sunday midnight.
+  const p = verifyCronRoutines(cron({ schedule: '0 8 * * 6' }), { workflowText: WORKFLOW });
+  assert.equal(p.length, 1);
+  assert.match(p[0].detail, /is not among the workflow's crons/);
+});
+
+test('verifyCronRoutines: workflow_job maps a routine id to a differently-named job', () => {
+  const p = verifyCronRoutines(
+    cron({ id: 'weekly-brain-review', workflow_job: 'weekly-brain-consolidation', schedule: '0 8 * * 1' }),
+    { workflowText: WORKFLOW },
+  );
+  assert.deepEqual(p, []);
+});
+
+test('verifyCronRoutines: a workflow_job pointing at nothing says so specifically', () => {
+  const p = verifyCronRoutines(cron({ workflow_job: 'no-such-job' }), { workflowText: WORKFLOW });
+  assert.equal(p.length, 1);
+  assert.match(p[0].detail, /workflow_job `no-such-job` does not exist/);
+});
+
+test('verifyCronRoutines: disabled and non-cron routines are ignored', () => {
+  const routines = [
+    { id: 'ghost', mechanism: 'cron', enabled: false, schedule: '5 5 * * *' },
+    { id: 'a-rule', mechanism: 'agent-rule', enabled: true },
+    { id: 'a-hook', mechanism: 'hook', enabled: true },
+  ];
+  assert.deepEqual(verifyCronRoutines(routines, { workflowText: WORKFLOW }), []);
+});
+
+test('verifyCronRoutines: mechanism external is exempt', () => {
+  // Stage 1 of the Life OS cadence runs in Grok Tasks. It will never have a job here, which is
+  // exactly why it is not declared `cron` — declaring it so would make verify permanently red.
+  const routines = [{ id: 'daily-briefing', mechanism: 'external', enabled: true, schedule: '0 6 * * *' }];
+  assert.deepEqual(verifyCronRoutines(routines, { workflowText: WORKFLOW }), []);
+});
+
+test('verifyCronRoutines: an unreadable workflow file fails every cron routine', () => {
+  // Silence here would mean "all clear" on a host where the workflow is absent entirely.
+  const p = verifyCronRoutines(cron(), { workflowText: null });
+  assert.equal(p.length, 1);
+  assert.equal(p[0].severity, 'error');
+  assert.match(p[0].detail, /not found/);
+});
+
+test('verifyCronRoutines: no cron routines means nothing to verify', () => {
+  assert.deepEqual(verifyCronRoutines([], { workflowText: null }), []);
+});
+
+test('the live routines.yml has at most one unregistered cron routine', () => {
+  // weekly-agent-review is knowingly unregistered and documented as a pending human decision
+  // (add the Saturday job, or disable the routine). This test is here so a SECOND one cannot be
+  // added silently, and so it fails loudly the moment that decision is made either way.
+  const routines = parseRoutinesYml(readFileSync(new URL('../config/routines.yml', import.meta.url), 'utf8'));
+  const problems = verifyCronRoutines(routines);
+  assert.deepEqual(
+    problems.map(p => p.id),
+    ['weekly-agent-review'],
+    'cron routines and scheduled-tasks.yml have drifted apart — run `node tools/routines.js verify`',
+  );
 });

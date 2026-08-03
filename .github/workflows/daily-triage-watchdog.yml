@@ -1,0 +1,129 @@
+name: Daily Triage Watchdog
+
+# The 07:00 daily-triage job runs on the self-hosted runner. When that runner is offline the job
+# never starts at all: no run, no failure, no notification — the exact condition that let four
+# consecutive missed triages pass unnoticed. This workflow runs on GitHub-hosted infra so it can
+# see that absence from outside, the same way runner-health-check.yml does for the runner itself.
+#
+# The distinction from runner-health-check.yml is deliberate: that one answers "is a runner
+# online", this one answers "did today's triage actually produce a result". A runner can be
+# perfectly healthy while the triage fails on a missing skill or an expired MCP connector.
+#
+# It shares ALERT_KEY with the daily-triage job, so an outage detected from either side is one
+# issue, not two, and a successful run closes it from either side.
+
+on:
+  schedule:
+    # 14:00 UTC — seven hours after the 07:00 target. GitHub's scheduler regularly runs cron jobs
+    # 1-3 hours late under load (observed on this repo: a `0 7 * * *` schedule firing at 09:00,
+    # 10:32 and 11:21), so a tighter window would report false outages. Still well before
+    # end of day, which is the point.
+    - cron: '0 14 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  actions: read
+  contents: read
+
+jobs:
+  check-triage:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: daily-triage-down
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Did a daily-triage job succeed today?
+        id: check
+        run: |
+          set -uo pipefail
+          today=$(date -u +%F)
+
+          # Look at the workflow's recent runs and ask each one how its daily-triage JOB ended.
+          # The run-level conclusion is not usable here: scheduled-tasks.yml holds five jobs and
+          # skips four of them on any given schedule, so a run can be green with daily-triage
+          # skipped, or red for a weekly job while the triage was fine.
+          runs=$(gh api "repos/$GH_REPO/actions/workflows/scheduled-tasks.yml/runs?per_page=30" \
+                 --jq '.workflow_runs[] | "\(.id) \(.created_at)"' 2>/dev/null || true)
+
+          if [ -z "$runs" ]; then
+            echo "state=unknown" >> "$GITHUB_OUTPUT"
+            echo "detail=could not list scheduled-tasks.yml runs" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          state=missing
+          detail="no daily-triage job ran on $today"
+          while read -r id created; do
+            [ "${created:0:10}" = "$today" ] || continue
+            conclusion=$(gh api "repos/$GH_REPO/actions/runs/$id/jobs" \
+                         --jq '.jobs[] | select(.name=="daily-triage") | .conclusion' 2>/dev/null | head -1)
+            [ -z "$conclusion" ] && continue
+            case "$conclusion" in
+              success)
+                state=ok
+                detail="daily-triage succeeded today in run $id"
+                break
+                ;;
+              skipped) ;;   # a weekly-cron run; says nothing about the triage
+              *)
+                state=failed
+                detail="daily-triage concluded \`$conclusion\` today in [run $id]($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id)"
+                ;;
+            esac
+          done <<< "$runs"
+
+          # A `failed` run already raised its own alert from the job itself. Only report it here
+          # when that could not have happened — but re-raising is harmless (same key), so keep it
+          # simple and let idempotency do the work.
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "detail=$detail" >> "$GITHUB_OUTPUT"
+          echo "Watchdog: state=$state — $detail"
+
+      # `detail` reaches the shell through env, not through `${{ }}` inline in the script. It is
+      # assembled from API values, and interpolating those straight into a quoted shell string is
+      # the standard Actions script-injection footgun.
+      - name: Raise the human-needed alert
+        if: steps.check.outputs.state == 'missing' || steps.check.outputs.state == 'failed'
+        env:
+          DETAIL: ${{ steps.check.outputs.detail }}
+        run: |
+          action=$(cat <<EOF
+          Check, in order:
+
+          1. Is the self-hosted runner online — \`gh api repos/$GH_REPO/actions/runners\` — and is
+             there an open \`runner:down\` issue?
+          2. Are Actions enabled for the repo?
+          3. Did the run fail preflight? That means the gitignored life-OS skills are not on the
+             host. Ship them from the machine that has them:
+             \`bash tools/deploy-private-skills.sh --host <user@host>\`
+
+          Then re-run with \`gh workflow run scheduled-tasks.yml -f job=daily-triage\`.
+          This issue closes itself on the next successful run.
+          EOF
+          )
+          node tools/human-needed.js raise "$ALERT_KEY" \
+            --title "[Life OS]: the 07:00 daily triage is not producing results" \
+            --why "Watchdog at $(date -u +%Y-%m-%dT%H:%M:%SZ): $DETAIL." \
+            --action "$action"
+
+      # A successful triage closes the alert from the job itself; this is the belt-and-braces path
+      # for the case where that step was the thing that failed.
+      - name: Clear the human-needed alert
+        if: steps.check.outputs.state == 'ok'
+        env:
+          DETAIL: ${{ steps.check.outputs.detail }}
+        run: |
+          node tools/human-needed.js resolve "$ALERT_KEY" --comment "Watchdog confirms $DETAIL."
+
+      # `unknown` neither opens nor closes — the same rule runner-health-check.yml follows. An
+      # API hiccup must not be reported as an outage, and must not silently clear a real one.
+      - name: Note an inconclusive check
+        if: steps.check.outputs.state == 'unknown'
+        env:
+          DETAIL: ${{ steps.check.outputs.detail }}
+        run: |
+          echo "::warning::Watchdog inconclusive: $DETAIL"

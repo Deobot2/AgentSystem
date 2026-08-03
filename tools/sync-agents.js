@@ -2,14 +2,24 @@
 /**
  * sync-agents.js -- Cross-platform agent sync (Linux/Mac/Windows)
  * Syncs agent definitions to every CLI. Cross-platform; replaced the PowerShell script.
- * Usage: node tools/sync-agents.js
+ *
+ * Usage:
+ *   node tools/sync-agents.js            sync repo -> ~/.claude/agents + the agy plugin
+ *   node tools/sync-agents.js --check    report drift, write nothing, exit 1 if any
+ *
+ * `--check` compares each installed file against what a sync WOULD write. Do not compare
+ * `.agents/agents/<a>.md` to `~/.claude/agents/<a>.md` directly: the source holds empty
+ * `<!-- SHARED:x -->` marker pairs that this tool expands from .agents/rules/shared-blocks.md, so
+ * that diff is never empty even when everything is perfectly in step (this misreading is what
+ * #195 reported as a data-loss hazard).
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT  = join(__dirname, '..');
@@ -173,7 +183,7 @@ function installAntigravityPlugin() {
   return false;
 }
 
-function syncAgent(file) {
+function syncAgent(file, { check = false } = {}) {
   const agentName = file.replace(/\.md$/, '').toLowerCase();
   const srcPath   = join(AGENTS_DIR, file);
   // Expand SHARED marker pairs before any platform write (see expandSharedBlocks above).
@@ -182,19 +192,38 @@ function syncAgent(file) {
   const name      = meta.name || agentName;
   const desc      = meta.description || '';
 
-  info(`Syncing: ${agentName}`);
+  if (!check) info(`Syncing: ${agentName}`);
 
   // Claude Code
   const claudeDir = join(HOME, '.claude', 'agents');
   ensureDir(claudeDir);
   const claudeModel = MODELS.claude[agentName] || meta.model || '';
-  writeFileSync(join(claudeDir, file), setModel(stripToolsLine(content), claudeModel), 'utf8');
-  ok(`Claude: ${join(claudeDir, file)}`);
+  const claudePath  = join(claudeDir, file);
+  const nextContent = setModel(stripToolsLine(content), claudeModel);
+
+  // --check compares the installed copy against what the sync WOULD write, and writes nothing.
+  //
+  // This is the only comparison that means anything, and getting it wrong is what #195 was:
+  // that issue's check was `diff .agents/agents/<a>.md ~/.claude/agents/<a>.md`, which can never
+  // come back clean, because the source carries empty `<!-- SHARED:x -->` marker pairs and the
+  // installed copy carries their expansion from .agents/rules/shared-blocks.md. Reading that
+  // built-in difference as "the installed copies are ahead of the repo" is what produced a
+  // high-priority report of an overwrite hazard that does not exist.
+  if (check) {
+    const drifted = !existsSync(claudePath) || readFileSync(claudePath, 'utf8') !== nextContent;
+    if (drifted) warn(`DRIFT ${agentName}: installed copy differs from what sync would write`);
+    else info(`same ${agentName}`);
+    return { drifted, agentName };
+  }
+
+  writeFileSync(claudePath, nextContent, 'utf8');
+  ok(`Claude: ${claudePath}`);
 
   // Antigravity CLI (agy) -- stage into the plugin agents/ dir (installed after the loop).
   // agy is a Gemini-family runtime, so it still uses gemini-* model ids from MODELS.gemini.
   const antiModel = MODELS.gemini[agentName] || 'gemini-3-flash-preview';
   writeAntigravityAgent(file, name, desc, antiModel, content);
+  return { drifted: false, agentName };
 }
 
 function syncConfig() {
@@ -224,14 +253,32 @@ function syncCommands() {
 }
 
 function main() {
-  info('Starting cross-platform agent sync...');
+  const check = process.argv.includes('--check');
+  info(check ? 'Checking agent drift (repo vs installed) — no files will be written...'
+             : 'Starting cross-platform agent sync...');
 
   // Rebuild the Antigravity plugin staging dir from scratch so removed agents don't linger.
-  if (existsSync(ANTI_AGENTS_DIR)) rmSync(ANTI_AGENTS_DIR, { recursive: true, force: true });
+  // Not under --check: that mode writes nothing.
+  if (!check && existsSync(ANTI_AGENTS_DIR)) rmSync(ANTI_AGENTS_DIR, { recursive: true, force: true });
 
   const files = readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md'));
+  const drifted = [];
   for (const file of files) {
-    try { syncAgent(file); } catch (e) { warn(`Failed ${file}: ${e.message}`); }
+    try {
+      const r = syncAgent(file, { check });
+      if (r && r.drifted) drifted.push(r.agentName);
+    } catch (e) { warn(`Failed ${file}: ${e.message}`); }
+  }
+
+  if (check) {
+    if (drifted.length) {
+      warn(`${drifted.length} of ${files.length} installed agent(s) differ from the repo: ${drifted.join(', ')}`);
+      warn('Run `node tools/sync-agents.js` to bring them in step.');
+      process.exitCode = 1;
+    } else {
+      ok(`in sync — all ${files.length} installed agent definitions match the repo`);
+    }
+    return;
   }
 
   syncConfig();
@@ -247,4 +294,4 @@ function main() {
 // Only sync when run as a script. Importing this module (e.g. sync-agents.test.js
 // pulling in the frontmatter helpers) used to rm -rf the Antigravity agents dir
 // and rewrite ~/.claude/agents as a side effect of `npm test`.
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) main();
+if (isMainModule(import.meta.url)) main();
