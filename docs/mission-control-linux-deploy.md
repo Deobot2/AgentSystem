@@ -112,6 +112,65 @@ non-issue — but both CLIs must be installed on this host.
 
 ---
 
+## 2b. Life OS daily triage (the 07:00 job)
+
+`.github/workflows/scheduled-tasks.yml` runs **stage 2** of the Life OS cadence on this same
+runner at 07:00 UTC: it reads the brief that stage 1 (06:00, Grok Tasks, external) archived,
+covers the channels stage 1 cannot reach, and executes the AI-actionable items as **draft PRs**.
+
+The two skills it needs — `skills/daily-briefing/` and `skills/daily-triage/` — are
+**gitignored** (private life-OS content, #187). A `git clone` on this server does **not**
+contain them, and the job hard-fails on the missing `SKILL.md`. They ship out of band:
+
+```bash
+# from the machine where the skills exist (the authoring laptop), NOT from the server:
+bash tools/deploy-private-skills.sh --host you@server           # ship + install
+bash tools/deploy-private-skills.sh --host you@server --check   # verify, change nothing
+```
+
+That copies the skills into `~/dev/AgentSystem/skills/` on the target, runs
+`tools/install-skills.js` there, and creates `$LIFE_REPO/{briefings,closeouts}`. Idempotent.
+
+**Re-run it after every edit to either skill.** The `mission-control-update.timer` self-update
+pulls git, and git does not carry these files — so a skill edit on the laptop reaches the server
+only through this script. That is the one part of this deployment that does not self-heal.
+
+Then, on the server:
+
+```bash
+# 1. the job needs a checkout at this exact path (a symlink is fine):
+ls -d ~/dev/AgentSystem
+
+# 2. LIFE_REPO — where the brief and closeout live. Default ~/life; set it only to override.
+#    Must be identical for the webhook service and the runner, or MC serves a different
+#    directory than the job writes:
+gh variable set LIFE_REPO --body /home/you/life      # repo variable, read by the workflow
+sudo systemctl edit claude-webhook                   # add Environment=LIFE_REPO=/home/you/life
+
+# 3. the connectors. daily-triage reads Drive/Gmail/Notion/Calendar through interactively
+#    authenticated MCP connectors in THIS host's ~/.claude — `claude` must be signed in here:
+claude   # then verify the connectors resolve in a real session
+```
+
+**Known coverage gap, by design:** the skill also tries Beeper (`localhost:23373`) and Discord.
+A headless server runs neither, so those channels come back uncovered and the closeout says so
+rather than claiming a sweep it did not do. If you want them covered, the fix is installing the
+bridge on this host — not changing the skill.
+
+Verify the whole path before trusting the 07:00 cron:
+
+```bash
+gh workflow run scheduled-tasks.yml -f job=daily-triage
+gh run watch "$(gh run list --workflow=scheduled-tasks.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+curl -s -H "Authorization: Bearer $(cat ~/.claude/remote-webhook.key)" localhost:8765/briefing | head -c 400
+```
+
+The run's second step fails loudly when no closeout landed — a silent 07:00 no-op is the failure
+mode that hurts, so a red run is the intended signal, and it emails the hub inbox that stage 1
+triages next morning.
+
+---
+
 ## 3. Reaching it (three options, most→least secure)
 
 **A. SSH tunnel (default, no exposure).** Leave the server on loopback:

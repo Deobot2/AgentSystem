@@ -70,6 +70,7 @@ jobs:
           skill="$HOME/dev/AgentSystem/skills/daily-triage/SKILL.md"
           if [ ! -f "$skill" ]; then
             echo "::error::$skill missing — the private life-OS skill is not in this host's working copy."
+            echo "::error::Ship it from the authoring machine: bash tools/deploy-private-skills.sh --host <user@$(hostname)>"
             exit 1
           fi
           mkdir -p "${LIFE_REPO:-$HOME/life}/closeouts"

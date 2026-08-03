@@ -21,3 +21,8 @@ HANDOFF.md
 # SSH keypair for the Mission Control server — never commit a private key
 /linux-server
 /linux-server.pub
+
+# Deleted in #213: agent scratch logs quoting a client's private issue numbers, compliance gates,
+# and infra details — in a public repo. Ignored so they cannot re-enter by accident. Purging them
+# from git history is tracked in #214.
+/docs/archive/agents-memory/
