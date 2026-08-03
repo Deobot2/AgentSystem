@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } fr
 import { join, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -158,8 +159,8 @@ for (const arg of args) {
 }
 
 // Only auto-run the CLI when this file is executed directly.
-const isMainModule = process.argv[1] && new URL(`file://${process.argv[1]}`).href === import.meta.url;
-if (isMainModule) {
+const isMain = isMainModule(import.meta.url);
+if (isMain) {
   const { session, repo, title, cwd, outcome, timestamp } = flags;
 
   if (!session || !repo) {

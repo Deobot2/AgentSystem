@@ -10,7 +10,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+
+import { isMainModule } from './is-main.js';
 
 export const ROUTING_LOG_PATH = join(homedir(), 'agent-memory', 'nexus', 'routing-log.jsonl');
 
@@ -142,7 +143,6 @@ function main() {
   console.log(formatReport(branches, misroutes));
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) main();

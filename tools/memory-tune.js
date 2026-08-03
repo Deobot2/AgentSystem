@@ -15,9 +15,10 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { agentMemoryRoot, parseFrontmatter, serializeFrontmatter } from './graph/graph-lib.js';
 import { parseEntries } from './memory-search.js';
+import { isMainModule } from './is-main.js';
 
 const BOOST_PER_ACCESS = 0.03;
 const MAX_IMPORTANCE = 1.0;
@@ -277,8 +278,7 @@ function parseArgs(argv) {
   return flags;
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = parseArgs(process.argv);

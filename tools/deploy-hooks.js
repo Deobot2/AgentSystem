@@ -21,6 +21,7 @@ import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main.js';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLAUDE_HOME = join(homedir(), '.claude');
@@ -178,7 +179,7 @@ export function registerHooks({ dryRun = false } = {}) {
   return changes;
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:path')).resolve(process.argv[1]);
+const isMain = isMainModule(import.meta.url);
 if (isMain) {
   const check = process.argv.includes('--check');
   const results = check ? diffManifest() : deploy();

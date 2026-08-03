@@ -17,9 +17,10 @@
 // tier-aware extractAndRemember() so auto-capture and manual onboarding route identically.
 
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+
 import { extractAndRemember, readTranscriptText } from './memory-onboard.js';
 import { parseFlagsOrExit } from './cli-args.js';
+import { isMainModule } from './is-main.js';
 
 const USAGE = 'Usage: node tools/memory-capture.js <transcript-path> [--dry-run] [--help]';
 const MAX_FACTS = 5;
@@ -85,8 +86,7 @@ export function captureFromTranscript(transcriptPath, { llm, section = 'Session 
   };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const argv = process.argv.slice(2);

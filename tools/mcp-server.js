@@ -35,6 +35,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { isMainModule } from './is-main.js';
 
 const exec = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -302,8 +303,7 @@ async function handleTool(name, input) {
 
 export { TOOLS };
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const server = new Server(

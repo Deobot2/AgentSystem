@@ -21,12 +21,12 @@
  *   node session-namer.js --today
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, createReadStream, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, createReadStream } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { isMainModule } from './is-main.js';
 
 const HOME         = process.env.SESSION_NAMER_HOME || homedir();
 const REGISTRY     = join(HOME, 'agent-memory', 'nexus', 'session-registry.jsonl');
@@ -742,17 +742,12 @@ Registry: ${REGISTRY}
 // `node tools/session-namer.js --sweep`), not when it's `import`ed by the
 // test suite to unit-test pure helpers like cwdToProjectDir.
 //
-// argv[1] must be realpath'd before comparing: `import.meta.url` is always the
-// symlink-resolved path, so every caller that reaches this file through a
-// symlink -- which is ALL of them, since ~/dev/AgentSystem is a symlink to the
-// real checkout and the installed hooks + /rename-session invoke
-// `node ~/dev/AgentSystem/tools/session-namer.js` -- failed this check and
-// exited 0 having done absolutely nothing. Silent, exit-code-clean no-op.
-const isMainModule = process.argv[1] && (() => {
-  const href = (p) => { try { return pathToFileURL(realpathSync(p)).href; } catch { return pathToFileURL(p).href; } };
-  return href(process.argv[1]) === import.meta.url;
-})();
-if (isMainModule) main();
+// The comparison MUST realpath argv[1] -- see tools/is-main.js for why. This file is where that
+// bug was first found: every production caller reaches it through the ~/dev/AgentSystem symlink
+// (installed hooks, /rename-session), so the check never matched and the tool exited 0 having
+// done absolutely nothing. Regression-tested in tools/session-namer-symlink.test.js.
+const isMain = isMainModule(import.meta.url);
+if (isMain) main();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Antigravity CLI (agy) support

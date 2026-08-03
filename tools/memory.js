@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { isMainModule } from './is-main.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -80,8 +81,7 @@ export function resolveSubcommand(argv, { toolsDir, nexus } = {}) {
   }
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const nexus = join(agentMemoryRoot(), 'nexus');

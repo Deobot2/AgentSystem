@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { isMainModule } from './is-main.js';
 
 // hooks/routing-config.js is CommonJS (shared with the CJS-only hook harness) — bridge via
 // createRequire rather than duplicating its parsing logic in ESM.
@@ -85,8 +86,7 @@ export function generate(configPath, jarvisPath, { allowEmpty = false, dryRun = 
   return { rulesCount: rules.length, path: targetPath, content: updated, changed: content !== updated };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 const USAGE = `Usage: node tools/generate-routing-table.js [--check] [--config <path>] [--jarvis-md <path>]
 

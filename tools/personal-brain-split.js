@@ -5,9 +5,10 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { agentMemoryRoot, readGraph, writeGraph, addNode, addEdge, emptyGraph, parseFrontmatter } from './graph/graph-lib.js';
 import { parseFlagsOrExit } from './cli-args.js';
+import { isMainModule } from './is-main.js';
 
 const USAGE = 'Usage: node tools/personal-brain-split.js [--dry-run] [--help]';
 
@@ -165,8 +166,7 @@ ${text}
   return { ok: true, nodesCreated, nodesExisting, edgesAdded, candidateCount: candidates.length };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = parseFlagsOrExit(process.argv.slice(2), { usage: USAGE, allowed: ['dry-run'] });

@@ -25,9 +25,9 @@ export function parseArgs(argv) {
   return { issue, commit, extra };
 }
 
-import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+import { isMainModule } from './is-main.js';
+const isMain = isMainModule(import.meta.url);
 if (isMain) {
   const { issue, commit, extra } = parseArgs(process.argv.slice(2));
   if (!issue || !commit) {

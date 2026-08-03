@@ -6,9 +6,10 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { agentMemoryRoot, readGraph, parseFrontmatter, resolveRepoGraphPath } from './graph/graph-lib.js';
 import { parseEntries, tfidfEmbedding, cosineSimilarity } from './memory-search.js';
+import { isMainModule } from './is-main.js';
 
 // Pure: find the repo whose path is a prefix of cwd (longest match wins). Returns the
 // full registry entry (or null) so callers can also read brain_path etc.
@@ -243,8 +244,7 @@ function render(ctx) {
   ].join('\n');
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = {};

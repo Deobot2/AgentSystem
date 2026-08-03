@@ -7,8 +7,9 @@
 
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { readGraph, writeGraph, updateVisitCount } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
 // Pure: bump visit_count on every edge incident to an accessed node.
 export function foldVisits(graph, accessedNodeIds) {
@@ -45,8 +46,7 @@ export function reconsolidate(brainPath) {
   return { ok: true, folded: accessed.length, uniqueNodes: new Set(accessed).size };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const arg = process.argv.slice(2).find(a => a.startsWith('--brain-path='));

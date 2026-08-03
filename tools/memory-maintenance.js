@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { agentMemoryRoot } from './graph/graph-lib.js';
 import { parseFlagsOrExit } from './cli-args.js';
+import { isMainModule } from './is-main.js';
 
 const USAGE = 'Usage: node tools/memory-maintenance.js [--if-stale=DAYS] [--reflect] [--dry-run] [--quiet] [--help]';
 
@@ -60,8 +61,7 @@ export function runMaintenance({ reflect = false, quiet = false } = {}) {
   return results;
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = parseFlagsOrExit(process.argv.slice(2), {

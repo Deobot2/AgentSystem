@@ -8,10 +8,11 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import { execFileSync } from 'node:child_process';
 import { agentMemoryRoot, readGraph, parseFrontmatter } from './graph/graph-lib.js';
 import { remember } from './brain-remember.js';
+import { isMainModule } from './is-main.js';
 
 // Pure: build the reflection prompt from selected fact texts.
 export function buildReflectionPrompt(facts) {
@@ -81,8 +82,7 @@ export function reflect({ topN = 10, dryRun = false, llm = defaultLlm } = {}) {
   return { ok: true, insights, written };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const topN = parseInt((process.argv.find(a => a.startsWith('--top=')) || '--top=10').split('=')[1]);

@@ -20,6 +20,7 @@ import { reconcileFact, defaultLlm } from './memory-reconcile.js';
 import { readRegistry, findRepo } from './graph/known-repos.js';
 import { buildWikilinkMap, applyWikilinkMap } from './graph/wikilink-sync.js';
 import { findHighOverlapCandidates, loadNodesForSearch, markSuperseded } from './similarity-search.js';
+import { isMainModule } from './is-main.js';
 
 const GRAPH_INIT_PATH = join(dirname(fileURLToPath(import.meta.url)), 'graph', 'graph-init.js');
 
@@ -238,8 +239,7 @@ export function remember({ fact, section = 'Session Notes', llm, tier = 'persona
   return { ok: true, added: true, action, section, supersededText, split, salience: true };
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const args = process.argv.slice(2);

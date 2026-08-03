@@ -22,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { isMainModule } from './is-main.js';
 
 function parseArgs(argv) {
   const flags = { home: os.homedir(), keep: 5, tmpAgeHours: 24, dryRun: false };
@@ -136,5 +137,5 @@ function main() {
 
 export { findClaudeJsonBackups, pruneBackups, findOrphanedTmpFiles, deleteFiles };
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

@@ -4,8 +4,9 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'node:url';
+
 import { parseFlagsOrExit } from './cli-args.js';
+import { isMainModule } from './is-main.js';
 
 const USAGE = 'Usage: node tools/compute-trust-scores.js [--dry-run] [--help]';
 const RUN_LOG_DIR = path.join(os.homedir(), 'agent-memory', 'nexus', 'run-log');
@@ -120,8 +121,7 @@ No run data yet. Run logs are written to \`~/agent-memory/nexus/run-log/\` by ag
   console.log('[trust-scores] Empty report written to:', OUTPUT_FILE);
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = parseFlagsOrExit(process.argv.slice(2), { usage: USAGE, allowed: ['dry-run'] });

@@ -20,7 +20,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'url';
+
+import { isMainModule } from './is-main.js';
 
 function parseArgs(argv) {
   const args = { dryRun: false, home: os.homedir() };
@@ -115,5 +116,5 @@ function main() {
 
 export { fixSettingsText, loadCanonicalHashes, sweepMarkers };
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

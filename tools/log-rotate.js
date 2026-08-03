@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { isMainModule } from './is-main.js';
 
 function expandTilde(p) {
   return p && p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
@@ -140,5 +141,5 @@ function main() {
   }
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+const isMain = isMainModule(import.meta.url);
 if (isMain) main();

@@ -21,11 +21,12 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
+
 import { remember } from './brain-remember.js';
 import { buildClassifyPrompt, parseClassifiedFacts, AGENT_ROSTER } from './memory-classify.js';
 import { agentMemoryRoot } from './graph/graph-lib.js';
 import { readRegistry } from './graph/known-repos.js';
+import { isMainModule } from './is-main.js';
 
 const HOME     = homedir();
 const REGISTRY = join(HOME, 'agent-memory', 'nexus', 'session-registry.jsonl');
@@ -197,8 +198,7 @@ function printResult(result) {
 
 // ── CLI entry point ───────────────────────────────────────────────────────────
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   const flags = {};

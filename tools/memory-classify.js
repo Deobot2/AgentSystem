@@ -9,8 +9,8 @@
 // (e.g. an unknown flag typo) never silently no-ops; it always prints usage and exits.
 // Usage: node tools/memory-classify.js [--help]  (this module exports helpers; it has no CLI action)
 
-import { fileURLToPath } from 'node:url';
 import { parseFlagsOrExit } from './cli-args.js';
+import { isMainModule } from './is-main.js';
 
 const USAGE = 'Usage: node tools/memory-classify.js [--help]\n(library module — import { classifyAndExtract, parseClassifiedFacts } instead of running directly)';
 
@@ -107,8 +107,7 @@ export function parseClassifiedFacts(raw, { repos = [], agents = [] } = {}) {
   return out;
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/') === fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
   parseFlagsOrExit(process.argv.slice(2), { usage: USAGE, allowed: [] });
