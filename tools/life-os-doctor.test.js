@@ -204,3 +204,30 @@ test('softAlertBody lists only soft gaps, with their fixes', () => {
   assert.doesNotMatch(body, /claude CLI/, 'hard gaps belong in the preflight failure, not the coverage alert');
   assert.doesNotMatch(body, /Beeper/, 'info-level notes must stay out of the alert');
 });
+
+test('Beeper is info by default and soft when LIFE_OS_EXPECT_BEEPER is set', () => {
+  // Default: the skill documents an unreachable bridge as normal here, so it must not alert.
+  const off = evaluate(healthyFacts({ beeper: false, expectBeeper: false }));
+  assert.equal(off.softGaps, 0);
+  assert.equal(find(off.checks, 'Beeper bridge (localhost:23373)').level, 'info');
+
+  // Once someone declares they expect it, a dead bridge is a real coverage gap.
+  const on = evaluate(healthyFacts({ beeper: false, expectBeeper: true }));
+  assert.equal(on.softGaps, 1);
+  assert.equal(find(on.checks, 'Beeper bridge (localhost:23373)').level, 'soft');
+});
+
+test('a reachable Beeper is never a gap, expected or not', () => {
+  for (const expectBeeper of [true, false]) {
+    const r = evaluate(healthyFacts({ beeper: true, expectBeeper }));
+    assert.equal(r.softGaps, 0);
+    assert.equal(find(r.checks, 'Beeper bridge (localhost:23373)').ok, true);
+  }
+});
+
+test('an unprobed Beeper is never a gap, even when expected', () => {
+  // --hard-only declines to probe; that is not evidence the bridge is down.
+  const { checks, softGaps } = evaluate(healthyFacts({ beeper: null, expectBeeper: true }));
+  assert.equal(softGaps, 0);
+  assert.equal(find(checks, 'Beeper bridge (localhost:23373)').level, 'info');
+});

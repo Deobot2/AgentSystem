@@ -77,6 +77,7 @@ export function gatherFacts({ hardOnly = false } = {}) {
     // makes --hard-only claim a coverage gap that nobody has evidence for.
     connectors: hardOnly ? 'skipped' : probeConnectors(),
     beeper: hardOnly ? null : probeBeeper(),
+    expectBeeper: /^(1|true|yes)$/i.test(process.env.LIFE_OS_EXPECT_BEEPER || ''),
   };
 }
 
@@ -190,13 +191,22 @@ export function evaluate(f) {
     }
   }
 
-  // `info`, not `soft`: daily-triage/SKILL.md STEP 3 documents an unreachable Beeper as the
-  // normal case on this headless host and tells stage 2 to record the channel as uncovered and
-  // move on. An alert that fires every single day for an accepted condition is how you teach
-  // someone to ignore alerts, so this one is reported and never counted as a gap.
-  add('Beeper bridge (localhost:23373)', 'info', f.beeper === true,
-    f.beeper === null ? 'not probed' : f.beeper ? 'reachable' : 'unreachable — expected on a headless host',
-    'Only reachable on a machine running the Beeper desktop app. Stage 2 reports the channel as uncovered.');
+  // Beeper is `info` by default and `soft` once someone declares they expect it to work.
+  //
+  // daily-triage/SKILL.md STEP 3 documents an unreachable Beeper as the normal case on this
+  // headless host, so alerting on it out of the box would fire every single day for an accepted
+  // condition — the fastest way to teach someone to ignore alerts. But "accepted" stops being true
+  // the moment the app is actually installed: from then on, silence about a dead bridge is the
+  // bug. Set LIFE_OS_EXPECT_BEEPER=1 (env, or a repo variable on the runner) to flip it.
+  // `f.beeper === null` is --hard-only declining to probe. Not probing is not evidence of a gap,
+  // so it stays `info` even when the bridge is expected.
+  add('Beeper bridge (localhost:23373)', (f.expectBeeper && f.beeper !== null) ? 'soft' : 'info', f.beeper === true,
+    f.beeper === null ? 'not probed'
+      : f.beeper ? 'reachable'
+      : f.expectBeeper ? 'unreachable — but LIFE_OS_EXPECT_BEEPER is set, so this is a real gap'
+      : 'unreachable — expected on a headless host (set LIFE_OS_EXPECT_BEEPER=1 to treat as a gap)',
+    'Needs the Beeper desktop app running on this host with its Desktop API enabled. On a headless '
+      + 'box that means GTK/audio libs + Xvfb + an interactive login — see the human-needed alert.');
 
   const hardGaps = checks.filter((c) => c.level === 'hard' && !c.ok).length;
   const softGaps = checks.filter((c) => c.level === 'soft' && !c.ok).length;
