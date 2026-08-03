@@ -47,12 +47,18 @@ export function findByMarker(issues, key) {
 }
 
 /**
- * True when the newest comment is older than the ping window (or there are none).
+ * True when the last thing said on this alert is older than the ping window.
+ *
+ * `issueCreatedAt` counts as the first utterance, not just comments: an alert opened a minute ago
+ * has said everything it has to say, and a second job hitting the same key (the watchdog's
+ * scheduled run after a manual dispatch, say) must not immediately comment "still blocked" under
+ * a brand-new issue. Without it the first day of any outage collects a redundant comment.
+ *
  * `comments` are gh's `{ createdAt }` objects; order is not assumed.
  */
-export function shouldPing(comments, now = new Date(), windowHours = PING_WINDOW_HOURS) {
-  const times = (comments || [])
-    .map((c) => Date.parse(c.createdAt))
+export function shouldPing(comments, now = new Date(), windowHours = PING_WINDOW_HOURS, issueCreatedAt = null) {
+  const times = [...(comments || []).map((c) => c.createdAt), issueCreatedAt]
+    .map((t) => Date.parse(t))
     .filter((t) => Number.isFinite(t));
   if (times.length === 0) return true;
   const newest = Math.max(...times);
@@ -126,7 +132,7 @@ export function raise({ key, title, why, action, extraLabels = [], assignee, sou
     return { action: 'created', url };
   }
 
-  if (!shouldPing(commentsOf(existing.number))) {
+  if (!shouldPing(commentsOf(existing.number), new Date(), PING_WINDOW_HOURS, existing.createdAt)) {
     console.log(`already open and pinged recently: ${existing.url}`);
     return { action: 'skipped', url: existing.url, number: existing.number };
   }

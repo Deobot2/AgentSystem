@@ -158,3 +158,23 @@ test('CLI runs main() when invoked through a symlinked path', () => {
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+test('shouldPing treats the issue creation time as the first utterance', () => {
+  // An alert opened a minute ago must not immediately collect a "still blocked" comment when a
+  // second job hits the same key (a manual dispatch followed by the scheduled run).
+  const now = new Date('2026-08-03T19:30:00Z');
+  assert.equal(shouldPing([], now, PING_WINDOW_HOURS, '2026-08-03T19:22:00Z'), false);
+});
+
+test('shouldPing still pings a long-open alert that has no comments', () => {
+  const now = new Date('2026-08-03T19:30:00Z');
+  assert.equal(shouldPing([], now, PING_WINDOW_HOURS, '2026-08-01T19:22:00Z'), true);
+});
+
+test('shouldPing prefers the newest of comments and creation time', () => {
+  const now = new Date('2026-08-03T19:30:00Z');
+  // Old issue, recent comment -> quiet.
+  assert.equal(shouldPing([{ createdAt: '2026-08-03T19:00:00Z' }], now, PING_WINDOW_HOURS, '2026-07-01T00:00:00Z'), false);
+  // Recent issue, ancient comment (not really possible, but the max must win either way).
+  assert.equal(shouldPing([{ createdAt: '2026-07-01T00:00:00Z' }], now, PING_WINDOW_HOURS, '2026-08-03T19:20:00Z'), false);
+});
