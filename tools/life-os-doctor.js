@@ -138,7 +138,10 @@ function probeConnectors() {
 export function chatSources(env = process.env) {
   const sources = [];
   const beeper = env.BEEPER_API_URL || 'http://localhost:23373';
-  sources.push({ name: 'Beeper Desktop API', url: beeper, probe: `${beeper.replace(/\/$/, '')}/` });
+  // Probe the endpoint stage 2 would actually call, not `/`. The root 302s to a landing page even
+  // when the API is unauthenticated, so probing it reports "usable" for a server that answers 401
+  // to every real request.
+  sources.push({ name: 'Beeper Desktop API', url: beeper, probe: `${beeper.replace(/\/$/, '')}/v0/mcp` });
   if (env.MATRIX_HOMESERVER) {
     const hs = env.MATRIX_HOMESERVER.replace(/\/$/, '');
     sources.push({ name: 'Matrix homeserver', url: hs, probe: `${hs}/_matrix/client/versions` });
@@ -147,17 +150,25 @@ export function chatSources(env = process.env) {
 }
 
 /**
- * Probe each source. A source counts as up on ANY HTTP response — 401 is a healthy Beeper that
- * simply wants its token, and treating that as down would report an outage for a bridge that is
- * fine. Only a connection failure (curl's 000) means unreachable.
+ * Probe each source, distinguishing REACHABLE from USABLE.
+ *
+ * An earlier version of this counted any HTTP response as "up", on the reasoning that a 401 is a
+ * healthy Beeper that merely wants its token. That is true for liveness and useless for coverage:
+ * stage 2 cannot read a single message through a 401, so reporting it as up is the same false-green
+ * as the Google Chat connector claiming `✔ Connected` while 404ing on every call. The question this
+ * tool answers is "can the 07:00 run read chat", not "is a socket open".
+ *
+ * So 401/403 is reachable-but-unusable, and only that counts as coverage.
  */
 function probeChatSources(sources) {
   return sources.map((s) => {
     try {
       const code = execFileSync('curl', ['-s', '-m', '5', '-o', '/dev/null', '-w', '%{http_code}', s.probe],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-      return { ...s, up: code !== '000' && code !== '', code };
-    } catch { return { ...s, up: false, code: '000' }; }
+      const reachable = code !== '000' && code !== '';
+      const unauthorized = code === '401' || code === '403';
+      return { ...s, reachable, up: reachable && !unauthorized, unauthorized, code };
+    } catch { return { ...s, reachable: false, up: false, unauthorized: false, code: '000' }; }
   });
 }
 
@@ -232,8 +243,12 @@ export function evaluate(f) {
     const live = f.chat.filter((s) => s.up);
     for (const s of f.chat) {
       add(`chat: ${s.name}`, 'info', s.up,
-        s.up ? `up (${s.url}, HTTP ${s.code})` : `unreachable (${s.url})`,
-        'See #216.');
+        s.up ? `usable (${s.url}, HTTP ${s.code})`
+          : s.unauthorized ? `reachable but UNAUTHENTICATED (HTTP ${s.code}) — stage 2 cannot read it`
+          : `unreachable (${s.url})`,
+        s.unauthorized
+          ? 'Authenticate it: `claude` then `/mcp` and pick `beeper`. Reachability is not coverage.'
+          : 'See #216.');
     }
     add('chat coverage', (f.expectBeeper && !live.length) ? 'soft' : 'info', live.length > 0,
       live.length ? `${live.length}/${f.chat.length} source(s) up — using ${live[0].name}`

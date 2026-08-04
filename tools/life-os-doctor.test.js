@@ -217,7 +217,7 @@ test('chatSources: localhost by default, Matrix only when configured', () => {
 
 test('chatSources: trailing slashes do not produce doubled paths', () => {
   const s = chatSources({ BEEPER_API_URL: 'http://x:23373/', MATRIX_HOMESERVER: 'https://m/' });
-  assert.equal(s[0].probe, 'http://x:23373/');
+  assert.equal(s[0].probe, 'http://x:23373/v0/mcp');
   assert.equal(s[1].probe, 'https://m/_matrix/client/versions');
 });
 
@@ -264,4 +264,28 @@ test('each source is reported individually so a silent fallback is visible', () 
   const { checks } = evaluate(facts);
   assert.equal(find(checks, 'chat: Beeper Desktop API').ok, false);
   assert.equal(find(checks, 'chat: Matrix homeserver').ok, true);
+});
+
+test('a 401 source is reachable but NOT usable coverage', () => {
+  // Regression: the first version of probeChatSources counted any HTTP response as "up", so an
+  // unauthenticated Beeper (401) reported as covered while stage 2 could not read a single
+  // message — the same false-green as the Google Chat connector saying Connected and 404ing.
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: [{ name: 'Beeper Desktop API', url: 'http://x:23373', up: false, reachable: true, unauthorized: true, code: '401' }],
+  });
+  const { checks, softGaps } = evaluate(facts);
+  assert.equal(softGaps, 1, 'an unauthenticated source must count as a coverage gap');
+  const s = find(checks, 'chat: Beeper Desktop API');
+  assert.equal(s.ok, false);
+  assert.match(s.detail, /UNAUTHENTICATED/);
+  assert.match(s.fix, /\/mcp/);
+});
+
+test('an authenticated source still counts as coverage', () => {
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: [{ name: 'Beeper Desktop API', url: 'http://x:23373', up: true, reachable: true, unauthorized: false, code: '200' }],
+  });
+  assert.equal(evaluate(facts).softGaps, 0);
 });
