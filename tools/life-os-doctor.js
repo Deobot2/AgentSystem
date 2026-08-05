@@ -21,7 +21,7 @@
 // Conflating the two is what made the old check useless: it either blocked on things that only
 // degrade coverage, or stayed silent about them forever.
 
-import { existsSync, readFileSync, statSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -34,6 +34,11 @@ const LIFE = process.env.LIFE_REPO || join(HOME, 'life');
 // Gmail/Calendar/Notion for the fallback sweep when stage 1 was missed. The other ~13 connectors
 // claude.ai offers are irrelevant here and must not be reported as gaps.
 export const REQUIRED_CONNECTORS = ['Gmail', 'Google Drive', 'Google Calendar', 'Notion'];
+
+// The agent the 07:00 job runs as. Case-sensitive, and must match the `name:` frontmatter in
+// .agents/agents/jarvis.md — the workflow said `jarvis` for weeks and died on
+// "--agent 'jarvis' not found" the first time it got far enough to reach the model call.
+export const TRIAGE_AGENT = 'Jarvis';
 
 // ── fact gathering (all host I/O lives here, so evaluate() stays pure) ──────────
 
@@ -68,6 +73,7 @@ export function gatherFacts({ hardOnly = false } = {}) {
       closeouts: existsSync(join(LIFE, 'closeouts')),
     },
     claudeOnPath: which('claude'),
+    agentNames: listInstalledAgents(),
     knownRepoCount: knownRepos && Array.isArray(knownRepos.repos) ? knownRepos.repos.length
       : knownRepos && typeof knownRepos === 'object' ? Object.keys(knownRepos).length : null,
     todaysBrief: fileSize(join(LIFE, 'briefings', `${today}.md`)),
@@ -79,6 +85,24 @@ export function gatherFacts({ hardOnly = false } = {}) {
     chat: hardOnly ? null : probeChatSources(chatSources()),
     expectBeeper: /^(1|true|yes)$/i.test(process.env.LIFE_OS_EXPECT_BEEPER || ''),
   };
+}
+
+/**
+ * Names of agents installed for the Claude CLI, read from the `name:` frontmatter of
+ * ~/.claude/agents/*.md — the same field `--agent` matches, case-sensitively.
+ * Returns null if the directory cannot be read (different from "no agents installed").
+ */
+function listInstalledAgents() {
+  try {
+    const dir = join(HOME, '.claude', 'agents');
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => {
+        const m = /^name:\s*"?([^"\n]+)"?/m.exec(readFileSync(join(dir, f), 'utf8'));
+        return m ? m[1].trim() : null;
+      })
+      .filter(Boolean);
+  } catch { return null; }
 }
 
 function which(bin) {
@@ -210,6 +234,16 @@ export function evaluate(f) {
   add('claude CLI on PATH', 'hard', f.claudeOnPath === true,
     f.claudeOnPath ? 'found' : 'not found',
     'Install the Claude Code CLI for the runner user; a login shell PATH is not guaranteed in Actions.');
+
+  // Hard: the job cannot start without it, and the CLI's error is only visible after the run has
+  // already been dispatched and billed.
+  add(`--agent ${TRIAGE_AGENT} installed`, 'hard',
+    Array.isArray(f.agentNames) && f.agentNames.includes(TRIAGE_AGENT),
+    f.agentNames === null ? 'could not read ~/.claude/agents'
+      : f.agentNames.includes(TRIAGE_AGENT) ? `matched exactly (case-sensitive)`
+      : `no agent named exactly "${TRIAGE_AGENT}" — installed: ${f.agentNames.join(', ') || 'none'}`,
+    'Agent names are case-sensitive and come from the `name:` frontmatter. Run `node tools/sync-agents.js`, '
+      + 'and check the workflow uses the exact capitalisation.');
 
   add('known-repos.json', 'hard', typeof f.knownRepoCount === 'number',
     typeof f.knownRepoCount === 'number' ? `${f.knownRepoCount} repo(s)` : 'missing or unparseable',

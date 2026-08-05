@@ -154,7 +154,15 @@ jobs:
           # The skill writes the closeout itself (step 6) rather than this job capturing stdout:
           # it needs the file on disk before it pushes the notification, and a --bg subagent fan-out
           # means stdout is no longer a faithful transcript of the run.
-          claude --agent jarvis -p "Read $REPO/skills/daily-triage/SKILL.md and execute it now."
+          #
+          # `Jarvis`, not `jarvis`. Agent names are case-sensitive and come from the `name:`
+          # frontmatter in .agents/agents/<n>.md, which is capitalised for every supervisor. This
+          # job said `jarvis` from the day it was written and failed instantly with
+          # "--agent 'jarvis' not found" the first time it ever got far enough to reach the model
+          # call — the missing-skill error had masked it until then. The trap is even documented in
+          # this repo's own shared-blocks.md ("`--agent` names are case-sensitive").
+          # life-os-doctor.js now checks the name in preflight so this cannot recur silently.
+          claude --agent Jarvis -p "Read $REPO/skills/daily-triage/SKILL.md and execute it now."
 
       # Loud on failure by design. A silent 07:00 no-op is the failure mode that hurts: you find out
       # at lunch. A red run alone was not enough — it emails the hub inbox, which stage 1 triages the

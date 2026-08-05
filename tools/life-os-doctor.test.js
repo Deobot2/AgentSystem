@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, parseMcpList, softAlertBody, chatSources, REQUIRED_CONNECTORS } from './life-os-doctor.js';
+import { evaluate, parseMcpList, softAlertBody, chatSources, REQUIRED_CONNECTORS, TRIAGE_AGENT } from './life-os-doctor.js';
 
 /** A host where everything is in place. */
 function healthyFacts(overrides = {}) {
@@ -28,6 +28,7 @@ function healthyFacts(overrides = {}) {
     installedSkills: { 'daily-briefing': true, 'daily-triage': true },
     lifeDirs: { briefings: true, closeouts: true },
     claudeOnPath: true,
+    agentNames: ['Jarvis', 'Friday', 'Sam', 'r2d2'],
     knownRepoCount: 4,
     todaysBrief: null,
     todaysCloseout: null,
@@ -288,4 +289,32 @@ test('an authenticated source still counts as coverage', () => {
     chat: [{ name: 'Beeper Desktop API', url: 'http://x:23373', up: true, reachable: true, unauthorized: false, code: '200' }],
   });
   assert.equal(evaluate(facts).softGaps, 0);
+});
+
+// ── the agent name check ───────────────────────────────────────────────────────
+
+test('a case-mismatched agent name is a HARD gap', () => {
+  // The real failure: the workflow ran `--agent jarvis` while the installed agent is `Jarvis`.
+  // The CLI only reports this after the run is dispatched, so it must be caught in preflight.
+  const { checks, hardGaps } = evaluate(healthyFacts({ agentNames: ['jarvis', 'Friday'] }));
+  assert.equal(hardGaps, 1);
+  const c = find(checks, `--agent ${TRIAGE_AGENT} installed`);
+  assert.equal(c.level, 'hard');
+  assert.match(c.detail, /no agent named exactly/);
+  assert.match(c.detail, /jarvis/, 'the message should show what IS installed');
+});
+
+test('the exact agent name passes', () => {
+  assert.equal(evaluate(healthyFacts({ agentNames: ['Jarvis'] })).hardGaps, 0);
+});
+
+test('an unreadable agents dir is a hard gap, not a silent pass', () => {
+  const { checks, hardGaps } = evaluate(healthyFacts({ agentNames: null }));
+  assert.equal(hardGaps, 1);
+  assert.match(find(checks, `--agent ${TRIAGE_AGENT} installed`).detail, /could not read/);
+});
+
+test('no agents installed at all is reported clearly', () => {
+  const { checks } = evaluate(healthyFacts({ agentNames: [] }));
+  assert.match(find(checks, `--agent ${TRIAGE_AGENT} installed`).detail, /installed: none/);
 });
