@@ -9,6 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { isDue, validateDraft, HOLD_HOURS } from './life-os-outbox.js';
 
 const at = (iso) => ({ createdAt: iso });
@@ -103,4 +104,49 @@ test('draft is sent as an OBJECT, and null clears', () => {
 
   pushDraftToBeeper('9', null, { token: 't', exec: fakeCurl('200') });
   assert.ok(fakeCurl.last.args.includes(JSON.stringify({ draft: null })), 'null must clear, not wrap');
+});
+
+// ── channel mode is enforced at SEND time, not just at draft time ───────────────
+
+import { channelMode } from './life-os-outbox.js';
+import { writeFileSync as wf, mkdtempSync as mkd, rmSync as rms } from 'node:fs';
+import { tmpdir as tmp } from 'node:os';
+import { join as j } from 'node:path';
+
+test('channelMode reads the config and only "send" counts as sendable', () => {
+  const dir = mkd(j(tmp(), 'chanmode-'));
+  try {
+    const p = j(dir, 'outbound-channels.json');
+    wf(p, JSON.stringify({ channels: { messenger: { mode: 'send' }, instagram: { mode: 'draft-only' } } }));
+    assert.equal(channelMode('messenger', { configPath: p }), 'send');
+    assert.equal(channelMode('instagram', { configPath: p }), 'draft-only');
+  } finally { rms(dir, { recursive: true, force: true }); }
+});
+
+test('an unknown channel fails CLOSED', () => {
+  const dir = mkd(j(tmp(), 'chanmode-'));
+  try {
+    const p = j(dir, 'outbound-channels.json');
+    wf(p, JSON.stringify({ channels: {} }));
+    assert.equal(channelMode('telegram', { configPath: p }), 'draft-only');
+  } finally { rms(dir, { recursive: true, force: true }); }
+});
+
+test('an unreadable or malformed config fails CLOSED', () => {
+  // Never send when policy cannot be determined.
+  assert.equal(channelMode('messenger', { configPath: '/nonexistent/x.json' }), 'draft-only');
+  const dir = mkd(j(tmp(), 'chanmode-'));
+  try {
+    const p = j(dir, 'outbound-channels.json');
+    wf(p, 'not json at all');
+    assert.equal(channelMode('messenger', { configPath: p }), 'draft-only');
+  } finally { rms(dir, { recursive: true, force: true }); }
+});
+
+test('the live config is currently draft-only for every channel', () => {
+  // Nathan's instruction: the pipeline composes, a human sends. If this ever fails, someone flipped
+  // a channel to `send` — which is allowed, but should be a deliberate, visible change.
+  const cfg = JSON.parse(readFileSync(new URL('../config/outbound-channels.json', import.meta.url), 'utf8'));
+  const sending = Object.entries(cfg.channels).filter(([, v]) => v.mode === 'send').map(([k]) => k);
+  assert.deepEqual(sending, [], `these channels would auto-send: ${sending.join(', ')}`);
 });

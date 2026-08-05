@@ -3,38 +3,37 @@
     "Outbound policy for the daily triage, one row per channel. Read by skills/daily-triage/SKILL.md",
     "STEP 5b. This file exists so the send/no-send decision is a LOOKUP, never an inference: asking a",
     "model at 07:00 'is this work or personal?' is exactly the judgement that fails silently and",
-    "confidently, and it already failed once — Messenger was misread as personal from display names",
+    "confidently, and it already failed once \u2014 Messenger was misread as personal from display names",
     "when it is in fact JCR treasurer comms.",
     "",
     "THE RULE IS UNIFORM: nothing is ever sent by the run that composed it. Every outbound message is",
     "drafted, appears in the closeout in full, and is sent by the NEXT run unless cancelled. `mode`",
     "only decides what happens after that hold expires.",
     "",
-    "  send       — drafted, then sent automatically by the next run after the 12h hold",
-    "  draft-only — drafted and surfaced for a human to send; never sent by the pipeline",
+    "  send       \u2014 drafted, then sent automatically by the next run after the 12h hold",
+    "  draft-only \u2014 drafted and surfaced for a human to send; never sent by the pipeline",
     "",
-    "`draft-only` is sometimes policy and sometimes physics — see gmail, where the connector has no",
+    "`draft-only` is sometimes policy and sometimes physics \u2014 see gmail, where the connector has no",
     "send tool at all. The `reason` field says which, because those are not the same thing and a",
-    "future reader will want to know whether flipping the mode is even possible."
+    "future reader will want to know whether flipping the mode is even possible.",
+    "ALL CHANNELS ARE CURRENTLY draft-only. Nathan's call: the pipeline composes, a human sends. The deferred-send machinery is retained and tested, so flipping one channel back to `send` is a one-word change \u2014 but note that mode is enforced at SEND time, not only at draft time, so flipping a channel to draft-only also stops anything already queued for it."
   ],
-
   "holdHours": 12,
   "maxDraftsPerRun": 3,
-
   "channels": {
     "messenger": {
-      "mode": "send",
-      "reason": "JCR treasurer comms — official business."
+      "mode": "draft-only",
+      "reason": "Draft-only by Nathan's instruction (2026-08-05): every channel drafts, nothing is sent by the pipeline. Previous reason: JCR treasurer comms \u2014 official business."
     },
     "whatsapp": {
-      "mode": "send",
+      "mode": "draft-only",
       "scope": "groups whose topic is society/committee business (DUE, UCTEC and similar). Never a 1:1.",
-      "reason": "Society business. 1:1 WhatsApp is personal and stays out of scope."
+      "reason": "Draft-only by Nathan's instruction (2026-08-05): every channel drafts, nothing is sent by the pipeline. Previous reason: Society business. 1:1 WhatsApp is personal and stays out of scope."
     },
     "linkedin": {
-      "mode": "send",
-      "reason": "Requested twice, explicitly. Enabled on that instruction.",
-      "risk": "HIGHEST of any channel here. Automated messaging breaches LinkedIn's user agreement, they detect it, and this account is reached through mautrix-linkedin — an unofficial cookie session. A ban costs the bridge AND the account. Flip to draft-only if that trade stops looking worth it."
+      "mode": "draft-only",
+      "reason": "Draft-only by Nathan's instruction (2026-08-05): every channel drafts, nothing is sent by the pipeline. Previous reason: Requested twice, explicitly. Enabled on that instruction.",
+      "risk": "HIGHEST of any channel here. Automated messaging breaches LinkedIn's user agreement, they detect it, and this account is reached through mautrix-linkedin \u2014 an unofficial cookie session. A ban costs the bridge AND the account. Flip to draft-only if that trade stops looking worth it."
     },
     "instagram": {
       "mode": "draft-only",
@@ -50,7 +49,7 @@
     },
     "gmail": {
       "mode": "draft-only",
-      "reason": "PHYSICS, not policy. The Gmail connector exposes create_draft/update_draft/list_drafts and no send tool of any kind — verified against the live tool list. A draft is created in Gmail and Nathan sends it. Deferred send would need a different transport (SMTP, or the Gmail API with a send scope), which is a separate piece of work."
+      "reason": "PHYSICS, not policy. The Gmail connector exposes create_draft/update_draft/list_drafts and no send tool of any kind \u2014 verified against the live tool list. A draft is created in Gmail and Nathan sends it. Deferred send would need a different transport (SMTP, or the Gmail API with a send scope), which is a separate piece of work."
     }
   }
 }

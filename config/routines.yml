@@ -183,11 +183,14 @@
   action: "Stage 1 is a Grok Task, not a local cron — nothing here launches it. Prompt: skills/daily-briefing/portable-prompt.md. Its step 5 chains the Sunday weekly + last-day monthly roll-ups, so there are no separate weekly/monthly crons. Brief goes to Drive `Life OS/briefings/YYYY-MM-DD` AND ${LIFE_REPO:-$HOME/life}/briefings/YYYY-MM-DD.md — the exact name MC's /briefing tab serves and stage 2 reads."
 
 - id: daily-triage
-  description: Stage 2 (07:00) — read stage 1's handoff, cover Beeper/Discord/GitHub, execute AI-actionable items as draft PRs, write the closeout
+  description: Stage 2 — twice daily (06:00 and 22:00 Pacific): read stage 1's handoff, cover chat/GitHub, execute AI-actionable items as draft PRs, draft outbound, write the closeout
   trigger: schedule
   mechanism: cron
   workflow_job: daily-triage
-  schedule: "0 7 * * *"
+  # Two crons, both required to exist — `verify` checks every entry in this list. 13:00 UTC = 06:00
+  # PDT, 05:00 UTC = 22:00 PDT (the previous Pacific day). UTC-only and DST-blind, so these become
+  # 05:00 and 21:00 Pacific in winter.
+  schedule: "0 13 * * *, 0 5 * * *"
   task_name: AgentSystem-DailyTriage
   enforce: hard
   enabled: true

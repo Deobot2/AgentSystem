@@ -269,11 +269,17 @@ export function verifyCronRoutines(routines, { workflowText } = {}) {
       });
       continue;
     }
-    if (r.schedule && !schedules.has(r.schedule)) {
+    // A routine may map to SEVERAL crons — daily-triage runs twice a day — so `schedule` accepts a
+    // comma-separated list and EVERY entry must exist in the workflow. Checking only the first would
+    // let a second schedule drift away unnoticed, which is the whole failure this guards.
+    const declared = String(r.schedule || '').split(',').map(x => x.trim()).filter(Boolean);
+    const missing = declared.filter(x => !schedules.has(x));
+    if (missing.length) {
       problems.push({
         id: r.id,
         severity: 'error',
-        detail: `schedule "${r.schedule}" is not among the workflow's crons (${[...schedules].map(s => `"${s}"`).join(', ')})`,
+        detail: `schedule ${missing.map(x => `"${x}"`).join(' and ')} not among the workflow's crons `
+          + `(${[...schedules].map(x => `"${x}"`).join(', ')})`,
       });
     }
   }

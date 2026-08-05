@@ -172,7 +172,7 @@ test('verifyCronRoutines: a schedule that disagrees with the workflow is an erro
   // The real case: weekly-trust-scores said Saturday 08:00 while the job ran Sunday midnight.
   const p = verifyCronRoutines(cron({ schedule: '0 8 * * 6' }), { workflowText: WORKFLOW });
   assert.equal(p.length, 1);
-  assert.match(p[0].detail, /is not among the workflow's crons/);
+  assert.match(p[0].detail, /not among the workflow's crons/);
 });
 
 test('verifyCronRoutines: workflow_job maps a routine id to a differently-named job', () => {
@@ -243,4 +243,17 @@ test('compile output does not depend on machine-local bypasses', () => {
     enabledAgentRules.sort(),
     'the generated file must mirror the registry exactly — no local bypass may leak into it',
   );
+});
+
+test('verifyCronRoutines: a routine may declare several crons and all must exist', () => {
+  // daily-triage runs twice daily. Checking only the first entry would let the second drift away
+  // silently, which is precisely the #200 failure mode.
+  const wf = "on:\n  schedule:\n    - cron: '0 13 * * *'\n    - cron: '0 5 * * *'\njobs:\n  daily-triage:\n";
+  const r = (sched) => [{ id: 'daily-triage', mechanism: 'cron', enabled: true, schedule: sched }];
+
+  assert.deepEqual(verifyCronRoutines(r('0 13 * * *, 0 5 * * *'), { workflowText: wf }), []);
+
+  const partial = verifyCronRoutines(r('0 13 * * *, 0 9 * * *'), { workflowText: wf });
+  assert.equal(partial.length, 1, 'one bad entry in the list must still fail');
+  assert.match(partial[0].detail, /"0 9 \* \* \*"/);
 });

@@ -20,10 +20,18 @@ on:
     - cron: '0 8 * * 1'
     # weekly-memory-decay + weekly-trust-scores + weekly-hygiene: Sunday midnight UTC
     - cron: '0 0 * * 0'
-    # daily-triage (Life OS stage 2): every day 7am UTC. Stage 1 (06:00) is Grok Tasks, external
-    # to this repo — see skills/daily-briefing/portable-prompt.md. The hour gap is deliberate:
-    # stage 2 reads the brief stage 1 archives to Drive.
-    - cron: '0 7 * * *'
+    # daily-triage (Life OS stage 2): TWICE daily, anchored to Pacific.
+    #   13:00 UTC = 06:00 PDT (morning run)
+    #   05:00 UTC = 22:00 PDT (evening run, the PREVIOUS Pacific day)
+    # GitHub cron is UTC-only and DST-blind, so in winter (PST, UTC-8) these land at 05:00 and 21:00
+    # Pacific instead. Shift both by an hour in November and March if that matters.
+    #
+    # Both runs fall on the SAME UTC date — 22:00 PDT is 05:00 UTC the next morning — so they share a
+    # closeout filename. STEP 6 of the skill appends a run section rather than overwriting, because
+    # Mission Control's /briefing filter is strictly /^\d{4}-\d{2}-\d{2}\.md$/ and would not see a
+    # slot-suffixed file at all.
+    - cron: '0 13 * * *'
+    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       job:
@@ -51,7 +59,7 @@ jobs:
   # Jarvis (opus, high effort) rather than Threepio: this run spawns per-item subagents, which is
   # orchestration, not writing. Concurrency and item caps live in the skill, not here.
   daily-triage:
-    if: (github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'schedule' && (github.event.schedule == '0 13 * * *' || github.event.schedule == '0 5 * * *')) || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, Linux]
     # Generous: 10 items x up to 30min each, batched 4 at a time, plus the gather pass.
     timeout-minutes: 180

@@ -14,11 +14,12 @@ name: Daily Triage Watchdog
 
 on:
   schedule:
-    # 14:00 UTC — seven hours after the 07:00 target. GitHub's scheduler regularly runs cron jobs
-    # 1-3 hours late under load (observed on this repo: a `0 7 * * *` schedule firing at 09:00,
-    # 10:32 and 11:21), so a tighter window would report false outages. Still well before
-    # end of day, which is the point.
-    - cron: '0 14 * * *'
+    # 20:00 UTC. daily-triage now runs twice, at 05:00 and 13:00 UTC, and GitHub's scheduler
+    # regularly fires 1-4 hours late under load (observed here: a `0 7 * * *` schedule firing at
+    # 09:00, 10:32 and 11:21). 20:00 leaves the later run ~7h of slack before this calls it missing,
+    # which is what prevents false outage reports. Only ONE of the day's runs needs to have
+    # succeeded, so an early success already covers a drifting later one.
+    - cron: '0 20 * * *'
   workflow_dispatch: {}
 
 permissions:

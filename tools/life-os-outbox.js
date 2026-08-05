@@ -104,6 +104,24 @@ export function validateDraft(d) {
   return errs;
 }
 
+/**
+ * Send-eligibility for a channel, read from config/outbound-channels.json.
+ *
+ * Enforced at SEND time, not only when drafting. That matters: flipping a channel to `draft-only`
+ * must also stop anything already sitting in the queue for it, otherwise yesterday's drafts go out
+ * under today's revoked policy. Unknown or unreadable config fails CLOSED — never send.
+ */
+export function channelMode(network, { configPath } = {}) {
+  const p = configPath || join(new URL('..', import.meta.url).pathname, 'config', 'outbound-channels.json');
+  try {
+    const cfg = JSON.parse(readFileSync(p, 'utf8'));
+    const c = (cfg.channels || {})[network];
+    return c && c.mode === 'send' ? 'send' : 'draft-only';
+  } catch {
+    return 'draft-only';
+  }
+}
+
 export function readPending() {
   ensureDirs();
   return readdirSync(PENDING)
@@ -207,7 +225,8 @@ if (isMainModule(import.meta.url)) {
     } else if (cmd === 'list') {
       show(readPending(), { json });
     } else if (cmd === 'due') {
-      show(readPending().filter((e) => !e._malformed && isDue(e)), { json });
+      // Both gates: the hold has expired AND the channel is still send-eligible.
+      show(readPending().filter((e) => !e._malformed && isDue(e) && channelMode(e.network) === 'send'), { json });
     } else if (cmd === 'cancel') {
       if (!id) { console.error(USAGE); process.exit(2); }
       cancel(id, typeof flags.reason === 'string' ? flags.reason : null);
