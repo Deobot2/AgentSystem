@@ -7,24 +7,24 @@
     "A non-interactive `claude -p` session gets a sandbox scoped to the runner workspace and no tool",
     "grants, so the 2026-08-05 run reached the model and correctly refused to do anything: it could",
     "not read $HOME/life, could not run gh, and was denied the Drive connector. The obvious fix is to",
-    "bypass permission checks entirely. #203 argues against exactly that, for exactly this context —",
+    "bypass permission checks entirely. #203 argues against exactly that, for exactly this context \u2014",
     "'Mission Control dispatches are remote and unattended, which is precisely the context where",
-    "skipping the permission prompt has the largest blast radius' — and says it needs its own issue",
+    "skipping the permission prompt has the largest blast radius' \u2014 and says it needs its own issue",
     "and an explicit opt-in rather than being added quietly while replacing something else. So this",
     "is an allowlist, in git, reviewable in a diff.",
     "",
-    "THE DENY LIST IS THE POINT. skills/daily-triage/SKILL.md opens with 'Hard limits — read before",
+    "THE DENY LIST IS THE POINT. skills/daily-triage/SKILL.md opens with 'Hard limits \u2014 read before",
     "anything else': draft PRs only, never merge, never mark ready-for-review, never push to main,",
-    "never send mail, never touch the calendar, nothing destructive. Those were prose in a prompt —",
+    "never send mail, never touch the calendar, nothing destructive. Those were prose in a prompt \u2014",
     "instructions the model is asked to follow, with nothing stopping it. Deny rules take precedence",
     "over allow, so the most dangerous of them are now actually enforced by the harness. That is the",
     "difference between a control that reads as enforced and one that can fire.",
     "",
     "Denials are deliberately narrow: they block the specific irreversible or outward-facing action,",
     "not the whole tool. `gh` stays usable for the GitHub sweep and for opening draft PRs; only merge",
-    "and ready-for-review are blocked. Gmail stays readable and can draft; it cannot send."
+    "and ready-for-review are blocked. Gmail stays readable and can draft; it cannot send.",
+    "NOTION, and why the list is explicit rather than a wildcard: the 2026-08-05 run reported Notion uncovered after calling `notion-list-recent-pages`, which does not exist \u2014 the connector offers search/fetch/query-*, not list-recent-pages. It got 'permissions not granted' for an unknown tool and gave up instead of falling back to notion-search, which WAS granted. The read-only surface is enumerated here so a reasonable choice lands; create-pages/update-page/move-pages stay unlisted, because stage 2 reads Notion and stage 1 is what writes to it."
   ],
-
   "permissions": {
     "allow": [
       "Read",
@@ -35,7 +35,6 @@
       "Skill",
       "Task",
       "TodoWrite",
-
       "Bash(gh:*)",
       "Bash(git:*)",
       "Bash(node:*)",
@@ -48,7 +47,6 @@
       "Bash(jq:*)",
       "Bash(wc:*)",
       "Bash(grep:*)",
-
       "mcp__claude_ai_Gmail__get_message",
       "mcp__claude_ai_Gmail__get_thread",
       "mcp__claude_ai_Gmail__search_threads",
@@ -56,26 +54,24 @@
       "mcp__claude_ai_Gmail__list_drafts",
       "mcp__claude_ai_Gmail__create_draft",
       "mcp__claude_ai_Gmail__update_draft",
-
       "mcp__claude_ai_Google_Calendar__list_calendars",
       "mcp__claude_ai_Google_Calendar__list_events",
       "mcp__claude_ai_Google_Calendar__search_events",
       "mcp__claude_ai_Google_Calendar__get_event",
-
       "mcp__claude_ai_Google_Drive__search_files",
       "mcp__claude_ai_Google_Drive__read_file_content",
       "mcp__claude_ai_Google_Drive__download_file_content",
       "mcp__claude_ai_Google_Drive__get_file_metadata",
       "mcp__claude_ai_Google_Drive__list_recent_files",
-
       "mcp__claude_ai_Notion__notion-search",
       "mcp__claude_ai_Notion__notion-fetch",
       "mcp__claude_ai_Notion__notion-query-data-sources",
-
+      "mcp__claude_ai_Notion__notion-query-database-view",
+      "mcp__claude_ai_Notion__notion-query-meeting-notes",
+      "mcp__claude_ai_Notion__notion-get-comments",
       "mcp__agentsystem__*",
       "mcp__beeper__*"
     ],
-
     "deny": [
       "Bash(gh pr merge:*)",
       "Bash(gh pr ready:*)",
@@ -87,7 +83,6 @@
       "Bash(rm -rf:*)",
       "Bash(sudo:*)",
       "Bash(prisma migrate deploy:*)",
-
       "mcp__claude_ai_Gmail__send_message",
       "mcp__claude_ai_Gmail__send_draft",
       "mcp__claude_ai_Google_Calendar__create_event",
