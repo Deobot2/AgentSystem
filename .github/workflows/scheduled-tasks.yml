@@ -78,7 +78,7 @@ jobs:
       ALERT_KEY: daily-triage-down
       # Chat sources, in preference order — see chatSources() in tools/life-os-doctor.js.
       # BEEPER_API_URL points at whichever machine runs Beeper Desktop with Remote Access on; it
-      # is a laptop, so it is asleep for a good share of 07:00 runs. MATRIX_HOMESERVER is the
+      # is a laptop, so it may be asleep at run time. MATRIX_HOMESERVER is the
       # same account's homeserver on Beeper's own infrastructure, which is not.
       BEEPER_API_URL: ${{ vars.BEEPER_API_URL || 'http://localhost:23373' }}
       MATRIX_HOMESERVER: ${{ vars.MATRIX_HOMESERVER || '' }}
@@ -150,7 +150,7 @@ jobs:
           EOF
             )
             node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
-              --title "[Life OS]: the 07:00 daily triage cannot run" \
+              --title "[Life OS]: the daily triage cannot run" \
               --why "Preflight on \`$(hostname)\` found blocking gaps. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for the doctor's table." \
               --action "$action" \
               || echo "::warning::could not raise the human-needed alert"
@@ -192,7 +192,7 @@ jobs:
             --settings "$REPO/config/daily-triage-permissions.json" \
             -p "Use the daily-triage skill and execute it now."
 
-      # Loud on failure by design. A silent 07:00 no-op is the failure mode that hurts: you find out
+      # Loud on failure by design. A silent no-op is the failure mode that hurts: you find out
       # at lunch. A red run alone was not enough — it emails the hub inbox, which stage 1 triages the
       # *next* morning, so the pipeline reported its own outage a day late and four consecutive
       # failures went unnoticed. The human-needed issue is the out-of-band channel.
@@ -203,7 +203,7 @@ jobs:
           dir="${LIFE_REPO:-$HOME/life}/closeouts"
           today=$(date +%F)
           if [ ! -s "$dir/$today.md" ]; then
-            echo "::error::$dir/$today.md missing or empty — the 07:00 triage produced no closeout."
+            echo "::error::$dir/$today.md missing or empty — the triage produced no closeout."
             exit 1
           fi
           echo "MC will serve: $today.md"
@@ -230,7 +230,7 @@ jobs:
           REPO: ${{ steps.repo.outputs.repo }}
         run: |
           node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
-            --title "[Life OS]: the 07:00 daily triage is failing" \
+            --title "[Life OS]: the daily triage is failing" \
             --why "Preflight passed but the run failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." \
             --action "Read the run log. The usual causes are an expired interactive MCP connector (Notion/Gmail/Calendar/Drive) in this host's \`~/.claude\`, Beeper Desktop not listening on localhost:23373, or the skill erroring before it wrote the closeout. Re-run with \`gh workflow run scheduled-tasks.yml -f job=daily-triage\` once fixed; this issue closes itself on the next successful run." \
             || echo "::warning::could not raise the human-needed alert"

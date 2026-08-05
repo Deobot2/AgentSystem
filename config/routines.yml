@@ -168,7 +168,8 @@
 # block. This entry documents the contract stage 2 depends on; changing it means changing
 # skills/daily-briefing/portable-prompt.md, which is what Grok actually runs.
 #
-# STAGE 2 (07:00) is ours: the `daily-triage` job in scheduled-tasks.yml.
+# STAGE 2 runs twice daily (13:00 and 05:00 UTC = 06:00 and 22:00 Pacific): the `daily-triage`
+# job in scheduled-tasks.yml.
 - id: daily-briefing
   description: Stage 1 (06:00, external Grok Tasks) — mail + calendar triage, brief archived to Drive and disk
   trigger: schedule
