@@ -41,6 +41,27 @@ export function upsertRepo(registry, entry) {
   return { ...registry, repos: [...registry.repos, record] };
 }
 
+/**
+ * The filesystem path for a repo ON THIS HOST.
+ *
+ * known-repos.json lives in ~/agent-memory, which is one registry SHARED by every host, so a single
+ * `path` cannot be right everywhere: the laptop's checkouts are at `C:/Users/natha/dev/...` and the
+ * Mission Control server's are under `/home/basely`. Until #220 this stored only the Windows paths,
+ * so on Linux every entry pointed at a directory that does not exist — and stage 2 validates every
+ * code item against this registry, which meant it could not dispatch a single one.
+ *
+ * Resolution order, first hit wins:
+ *   1. `paths[process.platform]`  — explicit per-platform entry
+ *   2. `path`                     — the legacy single field, still correct on the host that wrote it
+ * Returns null when nothing resolves, which callers must treat as "not available here" rather than
+ * as a bad slug — the repo may be perfectly valid on another host.
+ */
+export function repoPathForHost(repo, platform = process.platform) {
+  if (!repo) return null;
+  const fromMap = repo.paths && typeof repo.paths === 'object' ? repo.paths[platform] : null;
+  return fromMap || repo.path || null;
+}
+
 export function findRepo(registry, slug) {
   return registry.repos.find(r => r.slug === slug) ?? null;
 }

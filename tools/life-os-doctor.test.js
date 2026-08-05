@@ -30,6 +30,7 @@ function healthyFacts(overrides = {}) {
     claudeOnPath: true,
     agentNames: ['Jarvis', 'Friday', 'Sam', 'r2d2'],
     knownRepoCount: 4,
+    resolvableRepoCount: 4,
     todaysBrief: null,
     todaysCloseout: null,
     connectors: Object.fromEntries(REQUIRED_CONNECTORS.map((c) => [c, 'connected'])),
@@ -394,4 +395,18 @@ test('MATRIX_CRYPTO_READY without a token is still not coverage', () => {
   const s = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_CRYPTO_READY: '1' })
     .find(x => x.name === 'Matrix homeserver');
   assert.equal(s.hasCredential, false);
+});
+
+test('a registry that parses but whose paths do not exist here is a HARD gap', () => {
+  // #220: every entry held a Windows path, so on Linux nothing resolved and stage 2 could not
+  // dispatch a single code item — while the old check passed because the JSON was valid.
+  const { checks, hardGaps } = evaluate(healthyFacts({ knownRepoCount: 5, resolvableRepoCount: 0 }));
+  assert.equal(hardGaps, 1);
+  const c = find(checks, 'known-repos paths resolve here');
+  assert.equal(c.level, 'hard');
+  assert.match(c.detail, /0\/5/);
+});
+
+test('at least one resolvable repo passes', () => {
+  assert.equal(evaluate(healthyFacts({ knownRepoCount: 3, resolvableRepoCount: 3 })).hardGaps, 0);
 });

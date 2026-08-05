@@ -53,6 +53,14 @@ export function gatherFacts({ hardOnly = false } = {}) {
 
   let knownRepos = null;
   try { knownRepos = JSON.parse(readFileSync(join(HOME, 'agent-memory', 'nexus', 'known-repos.json'), 'utf8')); } catch { /* absent or malformed */ }
+  // Parseable is not the same as usable. Every entry held a Windows path, so on Linux none of them
+  // resolved and stage 2 could not dispatch a single code item — while this check happily passed
+  // because the JSON was valid (#220). Count what actually exists on THIS host.
+  const repoList = knownRepos && Array.isArray(knownRepos.repos) ? knownRepos.repos : [];
+  const resolvable = repoList.filter((r) => {
+    const p = (r.paths && r.paths[process.platform]) || r.path;
+    return p ? existsSync(p) : false;
+  }).length;
 
   const today = new Date().toISOString().slice(0, 10);
   const mcpState = hardOnly ? 'skipped' : probeConnectors();
@@ -77,6 +85,7 @@ export function gatherFacts({ hardOnly = false } = {}) {
     agentNames: listInstalledAgents(),
     knownRepoCount: knownRepos && Array.isArray(knownRepos.repos) ? knownRepos.repos.length
       : knownRepos && typeof knownRepos === 'object' ? Object.keys(knownRepos).length : null,
+    resolvableRepoCount: knownRepos ? resolvable : null,
     todaysBrief: fileSize(join(LIFE, 'briefings', `${today}.md`)),
     todaysCloseout: fileSize(join(LIFE, 'closeouts', `${today}.md`)),
     // 'skipped' and null mean different things and must not collapse: 'skipped' is --hard-only
@@ -289,6 +298,16 @@ export function evaluate(f) {
   add('known-repos.json', 'hard', typeof f.knownRepoCount === 'number',
     typeof f.knownRepoCount === 'number' ? `${f.knownRepoCount} repo(s)` : 'missing or unparseable',
     'node tools/bootstrap-repo.js --all ~/dev');
+
+  // Separate check, and HARD: a registry full of paths that do not exist on this host is a
+  // registry stage 2 cannot dispatch against. Parseable-but-unusable passed the check above for
+  // weeks while every code item was undispatchable (#220).
+  add('known-repos paths resolve here', 'hard',
+    typeof f.resolvableRepoCount === 'number' && f.resolvableRepoCount > 0,
+    f.resolvableRepoCount === null ? 'registry missing or unparseable'
+      : `${f.resolvableRepoCount}/${f.knownRepoCount} repo path(s) exist on this host`,
+    'Entries need a `paths.<platform>` for this host — the registry is shared by every machine, so '
+      + 'a single `path` cannot be right on all of them. See repoPathForHost() in tools/graph/known-repos.js.');
 
   // ── soft: coverage, not capability ──
   if (f.connectors === 'skipped') {
