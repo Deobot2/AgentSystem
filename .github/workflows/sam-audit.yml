@@ -5,9 +5,20 @@ name: Sam Security Audit
 #   is ready immediately — without this, a non-draft PR that never gets the ready-to-merge label
 #   or a draft->ready transition would merge un-audited.
 # - `ready_for_review`: covers the draft->ready transition.
-# - `labeled` (gated to `ready-to-merge` in the job `if:` below): lets a human re-request the
-#   audit at merge time on a PR that's already open (e.g. after addressing feedback).
-# `synchronize` is intentionally NOT a trigger — that was the old per-push behavior this replaces.
+# - `labeled` is GONE (#228). It existed to let a human re-request an audit after addressing
+#   feedback — but addressing feedback means pushing, and `synchronize` now covers that. Keeping it
+#   had two costs and no benefit: with no job-level `if:` every routine label (`documentation`,
+#   `priority:high`) would fire a full Claude audit plus a duplicate "ready to merge" comment, and
+#   any label-triggered early-exit would emit a PASSING check that overwrites a blocking one for the
+#   same SHA — reintroducing the bypass in a new shape. To force a re-audit without pushing, re-run
+#   the workflow from the Actions UI. Nothing else in the repo reads `ready-to-merge`.
+# `synchronize` IS a trigger as of #228, reversing the #164 decision above. Measured on PR #229:
+# pushing a commit correctly left the PR BLOCKED (no check for the new SHA) — but adding ANY label
+# then made the job skip, and GitHub counts a SKIPPED required check as SATISFIED, flipping the PR
+# to CLEAN with nothing audited. Sequence: open -> push -> add any label -> merge unaudited. No
+# `ready-to-merge` and no malice required; `documentation` does it.
+# The fix has two halves and needs both: audit on every push (here), and never skip at job level
+# (see the job `if:` below).
 # #147: NO paths-ignore here. This job is a required status check on main — a workflow-level
 # paths-ignore means docs-only PRs never produce the check at all, which makes them permanently
 # unmergeable once branch protection requires it. Docs-only and spec PRs instead early-exit
@@ -15,7 +26,7 @@ name: Sam Security Audit
 # still reports success without spending an audit run.
 on:
   pull_request:
-    types: [opened, ready_for_review, labeled]
+    types: [opened, ready_for_review, synchronize]
     branches: [main, dev]
 
 # New push to branch cancels in-flight audit — re-runs fresh
@@ -33,14 +44,17 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
-    # De-dupe: exactly one audit per PR at merge-prep time (see trigger comment above).
-    # `spec`-labeled PRs are NOT skipped at the job level anymore (#147) — a job-level skip
-    # produces no check run, which blocks merge once this check is required. They early-exit
-    # APPROVED in the precheck step below instead.
-    if: >-
-      (github.event.action == 'opened' && github.event.pull_request.draft == false) ||
-      github.event.action == 'ready_for_review' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'ready-to-merge')
+    # NO job-level `if:`. This is the crux of #228.
+    #
+    # The previous condition skipped the job for any event it did not recognise — a label that was
+    # not `ready-to-merge`, a `synchronize`, a draft `opened`. The #147 comment assumed a skip
+    # "produces no check run, which blocks merge". That is FALSE, and PR #229 measured it: a skipped
+    # job produces a check run with conclusion `skipped`, and GitHub treats a skipped required check
+    # as SATISFIED. So every skip path was an unlock, not a block.
+    #
+    # The job therefore always runs and always produces a real conclusion. Draft PRs and the
+    # de-dupe that `if:` used to provide are handled INSIDE the job, in the precheck step, where an
+    # early exit still emits a passing check run rather than a skipped one.
 
     steps:
       - uses: actions/checkout@v4
@@ -50,13 +64,23 @@ jobs:
       # #147: replaces workflow-level paths-ignore and job-level spec skip. Docs-only and
       # spec-labeled PRs get an APPROVED check without running the (expensive) Claude audit,
       # keeping the required status check green for them.
-      - name: Docs-only / spec precheck
+      - name: Draft / docs-only / spec precheck
         id: precheck
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const labels = context.payload.pull_request.labels.map(l => l.name);
+            const pr = context.payload.pull_request;
+            // Drafts are handled here rather than by a job-level `if:`. Skipping the job would
+            // emit a `skipped` conclusion, which GitHub counts as a satisfied required check —
+            // the #228 bypass. Exiting early here emits a real passing check instead, and the
+            // audit fires for real on ready_for_review.
+            if (pr.draft) {
+              core.setOutput('skip', 'true');
+              core.setOutput('skip_reason', 'draft PR — audit runs on ready_for_review');
+              return;
+            }
+            const labels = pr.labels.map(l => l.name);
             if (labels.includes('spec')) {
               core.setOutput('skip', 'true');
               core.setOutput('skip_reason', 'spec-labeled PR (design/spec discussion, not mergeable code audit)');
