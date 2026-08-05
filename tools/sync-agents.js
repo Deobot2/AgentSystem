@@ -46,7 +46,12 @@ const MODELS = {
 };
 
 const SYNC_LOG = join(REPO_ROOT, '.agents', 'sync.log');
+// `--check` writes nothing, including here. sync.log is tracked in git, so a read-only check that
+// appends to it leaves the working tree dirty — which makes `--check` unusable in CI and in any
+// "is the repo clean?" gate, the exact thing it exists to support.
+const LOG_ENABLED = !process.argv.includes('--check');
 function logLine(level, msg) {
+  if (!LOG_ENABLED) return;
   const line = `[${new Date().toISOString()}] [${level}] [sync-agents.js] ${msg}\n`;
   try { writeFileSync(SYNC_LOG, line, { flag: 'a' }); } catch { /* best-effort */ }
 }
