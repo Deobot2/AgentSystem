@@ -1,0 +1,100 @@
+{
+  "_comment": [
+    "Permission grant for the unattended 07:00 daily-triage run (.github/workflows/scheduled-tasks.yml).",
+    "Passed with `claude --settings`, which MERGES with the host's settings rather than replacing them.",
+    "",
+    "WHY THIS FILE EXISTS, AND WHY IT IS NOT `--dangerously-skip-permissions`:",
+    "A non-interactive `claude -p` session gets a sandbox scoped to the runner workspace and no tool",
+    "grants, so the 2026-08-05 run reached the model and correctly refused to do anything: it could",
+    "not read $HOME/life, could not run gh, and was denied the Drive connector. The obvious fix is to",
+    "bypass permission checks entirely. #203 argues against exactly that, for exactly this context —",
+    "'Mission Control dispatches are remote and unattended, which is precisely the context where",
+    "skipping the permission prompt has the largest blast radius' — and says it needs its own issue",
+    "and an explicit opt-in rather than being added quietly while replacing something else. So this",
+    "is an allowlist, in git, reviewable in a diff.",
+    "",
+    "THE DENY LIST IS THE POINT. skills/daily-triage/SKILL.md opens with 'Hard limits — read before",
+    "anything else': draft PRs only, never merge, never mark ready-for-review, never push to main,",
+    "never send mail, never touch the calendar, nothing destructive. Those were prose in a prompt —",
+    "instructions the model is asked to follow, with nothing stopping it. Deny rules take precedence",
+    "over allow, so the most dangerous of them are now actually enforced by the harness. That is the",
+    "difference between a control that reads as enforced and one that can fire.",
+    "",
+    "Denials are deliberately narrow: they block the specific irreversible or outward-facing action,",
+    "not the whole tool. `gh` stays usable for the GitHub sweep and for opening draft PRs; only merge",
+    "and ready-for-review are blocked. Gmail stays readable and can draft; it cannot send."
+  ],
+
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Skill",
+      "Task",
+      "TodoWrite",
+
+      "Bash(gh:*)",
+      "Bash(git:*)",
+      "Bash(node:*)",
+      "Bash(curl:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(test:*)",
+      "Bash(date:*)",
+      "Bash(jq:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+
+      "mcp__claude_ai_Gmail__get_message",
+      "mcp__claude_ai_Gmail__get_thread",
+      "mcp__claude_ai_Gmail__search_threads",
+      "mcp__claude_ai_Gmail__list_labels",
+      "mcp__claude_ai_Gmail__list_drafts",
+      "mcp__claude_ai_Gmail__create_draft",
+      "mcp__claude_ai_Gmail__update_draft",
+
+      "mcp__claude_ai_Google_Calendar__list_calendars",
+      "mcp__claude_ai_Google_Calendar__list_events",
+      "mcp__claude_ai_Google_Calendar__search_events",
+      "mcp__claude_ai_Google_Calendar__get_event",
+
+      "mcp__claude_ai_Google_Drive__search_files",
+      "mcp__claude_ai_Google_Drive__read_file_content",
+      "mcp__claude_ai_Google_Drive__download_file_content",
+      "mcp__claude_ai_Google_Drive__get_file_metadata",
+      "mcp__claude_ai_Google_Drive__list_recent_files",
+
+      "mcp__claude_ai_Notion__notion-search",
+      "mcp__claude_ai_Notion__notion-fetch",
+      "mcp__claude_ai_Notion__notion-query-data-sources",
+
+      "mcp__agentsystem__*",
+      "mcp__beeper__*"
+    ],
+
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr ready:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh release:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)",
+      "Bash(prisma migrate deploy:*)",
+
+      "mcp__claude_ai_Gmail__send_message",
+      "mcp__claude_ai_Gmail__send_draft",
+      "mcp__claude_ai_Google_Calendar__create_event",
+      "mcp__claude_ai_Google_Calendar__update_event",
+      "mcp__claude_ai_Google_Calendar__delete_event",
+      "mcp__claude_ai_Google_Calendar__respond_to_event",
+      "mcp__claude_ai_Google_Chat__send_message"
+    ]
+  }
+}

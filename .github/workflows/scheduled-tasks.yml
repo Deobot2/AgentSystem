@@ -162,7 +162,23 @@ jobs:
           # call — the missing-skill error had masked it until then. The trap is even documented in
           # this repo's own shared-blocks.md ("`--agent` names are case-sensitive").
           # life-os-doctor.js now checks the name in preflight so this cannot recur silently.
-          claude --agent Jarvis -p "Read $REPO/skills/daily-triage/SKILL.md and execute it now."
+          #
+          # The skill is referenced BY NAME, not by path. A non-interactive session is sandboxed to
+          # the runner workspace, so `$REPO/skills/daily-triage/SKILL.md` is unreadable from here —
+          # the 2026-08-05 run reported exactly that and fell back to the Skill registry itself.
+          # `~/.claude/skills/daily-triage` is where deploy-private-skills.sh installs it, and the
+          # registry resolves it regardless of sandbox.
+          #
+          # --add-dir: the sandbox otherwise excludes both the LIFE_REPO (where step 6 MUST write
+          # the closeout) and the real checkout (STEP 4 runs its GitHub sweep there).
+          # --settings: a reviewed allow/deny list, NOT --dangerously-skip-permissions. See the
+          # header of config/daily-triage-permissions.json for why, and note the deny list turns the
+          # skill's "hard limits" prose into rules the harness actually enforces.
+          claude --agent Jarvis \
+            --add-dir "${LIFE_REPO:-$HOME/life}" \
+            --add-dir "$REPO" \
+            --settings "$REPO/config/daily-triage-permissions.json" \
+            -p "Use the daily-triage skill and execute it now."
 
       # Loud on failure by design. A silent 07:00 no-op is the failure mode that hurts: you find out
       # at lunch. A red run alone was not enough — it emails the hub inbox, which stage 1 triages the
