@@ -1,0 +1,185 @@
+#!/usr/bin/env node
+// life-os-outbox.js — deferred outbound messages for the daily triage.
+//
+// Usage:
+//   node tools/life-os-outbox.js draft --chat <id> --network <name> --to <label> --body <text>
+//   node tools/life-os-outbox.js list [--json]        # everything pending, with due state
+//   node tools/life-os-outbox.js due [--json]         # only what is eligible to send now
+//   node tools/life-os-outbox.js cancel <id> [--reason "..."]
+//   node tools/life-os-outbox.js mark-sent <id>       # after the send actually succeeds
+//
+// WHY DEFERRED RATHER THAN IMMEDIATE
+//
+// A sent message is the one thing this pipeline does that cannot be undone, and it lands on a third
+// party. Everything else it produces is reviewable after the fact: a draft PR sits there, a closeout
+// is a file. So sending gets a veto window instead of an approval step — the run drafts, the 08:00
+// closeout shows the full text, and the NEXT run sends whatever has not been cancelled.
+//
+// That buys the thing an unattended job otherwise cannot have: a human in the loop, without a human
+// being awake. Cost is a day of latency, which for a morning digest is the right trade.
+//
+// Cancelling is deliberately a file operation — `cancel`, or just delete the .json. No service to
+// be up, nothing to authenticate, works from any shell or a file manager on a phone over ssh.
+//
+// The hold is measured from `createdAt`, not "one run ago": two runs on the same morning (a manual
+// dispatch plus the 07:00 cron) must not collapse the window to minutes.
+
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { isMainModule } from './is-main.js';
+
+const HOME = process.env.HOME || homedir();
+const LIFE = process.env.LIFE_REPO || join(HOME, 'life');
+const OUTBOX = join(LIFE, 'outbox');
+const PENDING = join(OUTBOX, 'pending');
+const SENT = join(OUTBOX, 'sent');
+const CANCELLED = join(OUTBOX, 'cancelled');
+
+/** Minimum time between drafting and sending. */
+export const HOLD_HOURS = 12;
+
+function ensureDirs() {
+  for (const d of [PENDING, SENT, CANCELLED]) mkdirSync(d, { recursive: true });
+}
+
+/** True when a draft has sat long enough to be sent. */
+export function isDue(entry, now = new Date(), holdHours = HOLD_HOURS) {
+  const created = Date.parse(entry.createdAt);
+  if (!Number.isFinite(created)) return false; // unparseable → never auto-send
+  return now.getTime() - created >= holdHours * 3600 * 1000;
+}
+
+/**
+ * Validate a draft before it can be written. A malformed entry must fail at draft time, in a run a
+ * human will read the closeout of — not at send time in a later run nobody is watching.
+ */
+export function validateDraft(d) {
+  const errs = [];
+  if (!d.chat) errs.push('chat is required (the Beeper chatID)');
+  if (!d.network) errs.push('network is required');
+  if (!d.body || !d.body.trim()) errs.push('body is required and cannot be blank');
+  if (d.body && d.body.length > 4000) errs.push('body exceeds 4000 chars');
+  return errs;
+}
+
+export function readPending() {
+  ensureDirs();
+  return readdirSync(PENDING)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => {
+      try { return { ...JSON.parse(readFileSync(join(PENDING, f), 'utf8')), _file: f }; }
+      catch { return { id: f.replace(/\.json$/, ''), _file: f, _malformed: true }; }
+    });
+}
+
+export function draft({ chat, network, to, body, item }) {
+  const errs = validateDraft({ chat, network, body });
+  if (errs.length) throw new Error(`invalid draft: ${errs.join('; ')}`);
+  ensureDirs();
+  const id = randomUUID().slice(0, 8);
+  const entry = {
+    id,
+    chat: String(chat),
+    network,
+    to: to || null,
+    body,
+    item: item || null,
+    createdAt: new Date().toISOString(),
+    sendsAfter: new Date(Date.now() + HOLD_HOURS * 3600 * 1000).toISOString(),
+  };
+  writeFileSync(join(PENDING, `${id}.json`), JSON.stringify(entry, null, 2) + '\n');
+  return entry;
+}
+
+function move(id, destDir, extra) {
+  const src = join(PENDING, `${id}.json`);
+  if (!existsSync(src)) throw new Error(`no pending draft with id ${id}`);
+  const entry = { ...JSON.parse(readFileSync(src, 'utf8')), ...extra };
+  mkdirSync(destDir, { recursive: true });
+  writeFileSync(join(destDir, `${id}.json`), JSON.stringify(entry, null, 2) + '\n');
+  unlinkSync(src);
+  return entry;
+}
+
+export function cancel(id, reason) {
+  return move(id, CANCELLED, { cancelledAt: new Date().toISOString(), reason: reason || null });
+}
+
+export function markSent(id) {
+  return move(id, SENT, { sentAt: new Date().toISOString() });
+}
+
+// ── CLI ────────────────────────────────────────────────────────────────────────
+
+const USAGE = `Usage:
+  node tools/life-os-outbox.js draft --chat <id> --network <name> [--to <label>] --body <text> [--item <ref>]
+  node tools/life-os-outbox.js list [--json]
+  node tools/life-os-outbox.js due [--json]
+  node tools/life-os-outbox.js cancel <id> [--reason "..."]
+  node tools/life-os-outbox.js mark-sent <id>
+
+Drafts wait ${HOLD_HOURS}h before becoming eligible to send. Cancel with the command above, or just
+delete the file under $LIFE_REPO/outbox/pending/.`;
+
+function parseArgs(argv) {
+  const [cmd, ...rest] = argv;
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) { flags[a.slice(2, eq)] = a.slice(eq + 1); continue; }
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('--')) flags[a.slice(2)] = true;
+      else { flags[a.slice(2)] = next; i++; }
+    } else positional.push(a);
+  }
+  return { cmd, id: positional[0], flags };
+}
+
+function show(entries, { json }) {
+  if (json) { console.log(JSON.stringify(entries, null, 2)); return; }
+  if (!entries.length) { console.log('Outbox empty.'); return; }
+  const now = new Date();
+  for (const e of entries) {
+    if (e._malformed) { console.log(`  [${e.id}] MALFORMED — will never send; delete or fix it`); continue; }
+    const state = isDue(e, now) ? 'DUE' : `holds until ${e.sendsAfter}`;
+    console.log(`  [${e.id}] ${e.network} -> ${e.to || e.chat}  (${state})`);
+    console.log(`        ${e.body.split('\n')[0].slice(0, 100)}${e.body.length > 100 ? '…' : ''}`);
+  }
+}
+
+if (isMainModule(import.meta.url)) {
+  const { cmd, id, flags } = parseArgs(process.argv.slice(2));
+  const json = flags.json === true || flags.json === 'true';
+  try {
+    if (cmd === 'draft') {
+      const e = draft({
+        chat: flags.chat, network: flags.network, to: flags.to,
+        body: typeof flags.body === 'string' ? flags.body : '', item: flags.item,
+      });
+      console.log(`drafted ${e.id} — sends after ${e.sendsAfter} unless cancelled`);
+    } else if (cmd === 'list') {
+      show(readPending(), { json });
+    } else if (cmd === 'due') {
+      show(readPending().filter((e) => !e._malformed && isDue(e)), { json });
+    } else if (cmd === 'cancel') {
+      if (!id) { console.error(USAGE); process.exit(2); }
+      cancel(id, typeof flags.reason === 'string' ? flags.reason : null);
+      console.log(`cancelled ${id}`);
+    } else if (cmd === 'mark-sent') {
+      if (!id) { console.error(USAGE); process.exit(2); }
+      markSent(id);
+      console.log(`marked ${id} sent`);
+    } else {
+      console.error(USAGE);
+      process.exit(2);
+    }
+  } catch (err) {
+    console.error(`outbox: ${err.message}`);
+    process.exit(1);
+  }
+}
