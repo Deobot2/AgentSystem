@@ -1,6 +1,6 @@
 name: Daily Triage Watchdog
 
-# The 07:00 daily-triage job runs on the self-hosted runner. When that runner is offline the job
+# The daily-triage job (13:00 and 05:00 UTC) runs on the self-hosted runner. When that runner is offline the job
 # never starts at all: no run, no failure, no notification — the exact condition that let four
 # consecutive missed triages pass unnoticed. This workflow runs on GitHub-hosted infra so it can
 # see that absence from outside, the same way runner-health-check.yml does for the runner itself.
@@ -107,7 +107,7 @@ jobs:
           EOF
           )
           node tools/human-needed.js raise "$ALERT_KEY" \
-            --title "[Life OS]: the 07:00 daily triage is not producing results" \
+            --title "[Life OS]: the daily triage is not producing results" \
             --why "Watchdog at $(date -u +%Y-%m-%dT%H:%M:%SZ): $DETAIL." \
             --action "$action"
 

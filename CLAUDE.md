@@ -36,7 +36,7 @@ Node builtins only, idempotent. Per-repo `nexus/` brain is gitignored.
 ### Central brain (one brain, every host)
 
 `~/agent-memory` is a checkout of the **private** repo `Zene8/agent-memory`. Every host running
-AgentSystem shares it, so a fact learned on the laptop is available to the 07:00 job on the Mission
+AgentSystem shares it, so a fact learned on the laptop is available to the scheduled job on the Mission
 Control server.
 
 - New host: `bash tools/brain-join.sh` — commits that host's existing nodes first, then merges the
@@ -104,12 +104,12 @@ See `docs/memory-and-routing-redesign.md` → "Routines engine".
 ## Life OS daily cadence
 
 Two stages. **Stage 1 (06:00)** is a Grok Task, external to this repo: it triages mail/calendar and
-archives a brief with a machine-readable `handoff:` block. **Stage 2 (07:00)** is the `daily-triage`
+archives a brief with a machine-readable `handoff:` block. **Stage 2 (13:00 and 05:00 UTC — 06:00 and 22:00 Pacific)** is the `daily-triage`
 job in `scheduled-tasks.yml` — Jarvis reads that handoff, covers Beeper/Discord/GitHub, executes
 AI-actionable items as **draft PRs only**, and writes `$LIFE_REPO/closeouts/YYYY-MM-DD.md`, which
 Mission Control's `GET /briefing` serves.
 
-- **Is it healthy?** `node tools/life-os-doctor.js`. Hard gaps fail the 07:00 preflight; soft gaps
+- **Is it healthy?** `node tools/life-os-doctor.js`. Hard gaps fail the preflight; soft gaps
   (an unauthenticated MCP connector) degrade coverage without failing the run. `--hard-only` skips
   the network probes; `--alert` opens/closes the coverage issue.
 - **The skills are gitignored** (#187) and git will never carry them. Ship them from the machine

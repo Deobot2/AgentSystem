@@ -55,10 +55,15 @@ test('pruneBackups dry-run deletes nothing', () => {
 });
 
 test('pruneBackups flags same-minute clusters among kept files as collisions', () => {
-  const now = Date.now();
+  // Anchored to the START of a minute, not to Date.now(). With a bare `now`, `now + 500` crosses
+  // into the NEXT minute whenever the test happens to run in the final 500ms of one — so the
+  // cluster splits, no collision is found, and the assertion fails. ~1 run in 120. It flaked
+  // locally and then failed CI on a required check, which is the worst version of this: a test
+  // that is right 99% of the time and blocks a merge the other 1%.
+  const minuteStart = Math.floor(Date.now() / 60000) * 60000;
   const files = [
-    { full: '/a', name: 'a', family: 'corrupted', mtimeMs: now },
-    { full: '/b', name: 'b', family: 'corrupted', mtimeMs: now + 500 }, // same minute
+    { full: '/a', name: 'a', family: 'corrupted', mtimeMs: minuteStart },
+    { full: '/b', name: 'b', family: 'corrupted', mtimeMs: minuteStart + 500 }, // same minute, guaranteed
   ];
   const { collisions } = pruneBackups(files, 5, true);
   assert.equal(collisions.length, 1);
