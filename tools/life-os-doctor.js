@@ -168,7 +168,18 @@ export function chatSources(env = process.env) {
   sources.push({ name: 'Beeper Desktop API', url: beeper, probe: `${beeper.replace(/\/$/, '')}/v0/mcp` });
   if (env.MATRIX_HOMESERVER) {
     const hs = env.MATRIX_HOMESERVER.replace(/\/$/, '');
-    sources.push({ name: 'Matrix homeserver', url: hs, probe: `${hs}/_matrix/client/versions` });
+    // `/_matrix/client/versions` is an UNAUTHENTICATED endpoint — it answers 200 to anybody, so it
+    // proves the homeserver exists and nothing else. Without an access token nothing can read a
+    // message, so a credential-less Matrix source is reachable, never usable. The 2026-08-05
+    // closeout caught this reporting "1/2 source(s) up — using Matrix homeserver" while actual
+    // chat coverage was zero; same class as counting Beeper's 401 as up.
+    sources.push({
+      name: 'Matrix homeserver',
+      url: hs,
+      probe: `${hs}/_matrix/client/versions`,
+      requiresCredential: true,
+      hasCredential: Boolean(env.MATRIX_ACCESS_TOKEN),
+    });
   }
   return sources;
 }
@@ -190,8 +201,10 @@ function probeChatSources(sources) {
       const code = execFileSync('curl', ['-s', '-m', '5', '-o', '/dev/null', '-w', '%{http_code}', s.probe],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
       const reachable = code !== '000' && code !== '';
-      const unauthorized = code === '401' || code === '403';
-      return { ...s, reachable, up: reachable && !unauthorized, unauthorized, code };
+      // A source needing a credential it does not have is unusable however cheerfully it answers.
+      const credMissing = s.requiresCredential === true && s.hasCredential !== true;
+      const unauthorized = code === '401' || code === '403' || credMissing;
+      return { ...s, reachable, up: reachable && !unauthorized, unauthorized, credMissing, code };
     } catch { return { ...s, reachable: false, up: false, unauthorized: false, code: '000' }; }
   });
 }
@@ -278,6 +291,7 @@ export function evaluate(f) {
     for (const s of f.chat) {
       add(`chat: ${s.name}`, 'info', s.up,
         s.up ? `usable (${s.url}, HTTP ${s.code})`
+          : s.credMissing ? `host is up (HTTP ${s.code}) but NO CREDENTIAL — reachability is not coverage`
           : s.unauthorized ? `reachable but UNAUTHENTICATED (HTTP ${s.code}) — stage 2 cannot read it`
           : `unreachable (${s.url})`,
         s.unauthorized

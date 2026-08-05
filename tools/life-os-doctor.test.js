@@ -318,3 +318,27 @@ test('no agents installed at all is reported clearly', () => {
   const { checks } = evaluate(healthyFacts({ agentNames: [] }));
   assert.match(find(checks, `--agent ${TRIAGE_AGENT} installed`).detail, /installed: none/);
 });
+
+test('a credential-less Matrix source is reachable but not coverage', () => {
+  // Caught by the 2026-08-05 closeout: /_matrix/client/versions is unauthenticated and answers 200
+  // to anyone, so the doctor reported "1/2 source(s) up — using Matrix homeserver" while actual
+  // chat coverage was zero.
+  const s = chatSources({ MATRIX_HOMESERVER: 'https://matrix.beeper.com' })
+    .find((x) => x.name === 'Matrix homeserver');
+  assert.equal(s.requiresCredential, true);
+  assert.equal(s.hasCredential, false, 'no MATRIX_ACCESS_TOKEN in this env');
+
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: [{ name: 'Matrix homeserver', url: 'https://m', up: false, reachable: true, unauthorized: true, credMissing: true, code: '200' }],
+  });
+  const { checks, softGaps } = evaluate(facts);
+  assert.equal(softGaps, 1, 'a 200 without credentials must not count as coverage');
+  assert.match(find(checks, 'chat: Matrix homeserver').detail, /NO CREDENTIAL/);
+});
+
+test('MATRIX_ACCESS_TOKEN makes the Matrix source credentialed', () => {
+  const s = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_ACCESS_TOKEN: 'syt_xxx' })
+    .find((x) => x.name === 'Matrix homeserver');
+  assert.equal(s.hasCredential, true);
+});
