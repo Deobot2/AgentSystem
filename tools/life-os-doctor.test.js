@@ -217,8 +217,11 @@ test('chatSources: localhost by default, Matrix only when configured', () => {
 });
 
 test('chatSources: trailing slashes do not produce doubled paths', () => {
+  // Beeper carries no HTTP probe any more (it is resolved from the MCP registry), so only the
+  // Matrix source has a URL to normalise.
   const s = chatSources({ BEEPER_API_URL: 'http://x:23373/', MATRIX_HOMESERVER: 'https://m/' });
-  assert.equal(s[0].probe, 'http://x:23373/v0/mcp');
+  assert.equal(s[0].url, 'http://x:23373/');
+  assert.equal(s[0].probe, undefined);
   assert.equal(s[1].probe, 'https://m/_matrix/client/versions');
 });
 
