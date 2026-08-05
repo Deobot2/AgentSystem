@@ -177,12 +177,21 @@ export function chatSources(env = process.env) {
     // message, so a credential-less Matrix source is reachable, never usable. The 2026-08-05
     // closeout caught this reporting "1/2 source(s) up — using Matrix homeserver" while actual
     // chat coverage was zero; same class as counting Beeper's 401 as up.
+    // An access token is NOT sufficient, and treating it as such would be the same false-green
+    // this check exists to prevent. Measured on 2026-08-05 with the token `bbctl login` already
+    // stores: whoami 200, 202 rooms visible, and of the timeline events **82 were
+    // `m.room.encrypted` against 1 readable body**. Beeper uses zero-access encryption, so reading
+    // needs the room keys — device verification plus a crypto-capable client with a persistent
+    // store — not just a bearer token.
+    //
+    // MATRIX_CRYPTO_READY is therefore the gate, and it must only be set once someone has actually
+    // decrypted a message from this host. A token alone leaves this source correctly unusable.
     sources.push({
       name: 'Matrix homeserver',
       url: hs,
       probe: `${hs}/_matrix/client/versions`,
       requiresCredential: true,
-      hasCredential: Boolean(env.MATRIX_ACCESS_TOKEN),
+      hasCredential: Boolean(env.MATRIX_ACCESS_TOKEN) && /^(1|true|yes)$/i.test(env.MATRIX_CRYPTO_READY || ''),
     });
   }
   return sources;

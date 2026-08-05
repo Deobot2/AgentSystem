@@ -46,7 +46,6 @@ test('a healthy host has no hard and no soft gaps', () => {
   assert.equal(softGaps, 0);
 });
 
-
 test('a missing private skill is a hard gap and names the deploy script', () => {
   const facts = healthyFacts();
   facts.skillSizes['skills/daily-triage/SKILL.md'] = null;
@@ -199,7 +198,6 @@ test('softAlertBody lists only soft gaps, with their fixes', () => {
 
 
 
-
 // ── chat source chain ──────────────────────────────────────────────────────────
 
 const chat = (...s) => s;
@@ -340,11 +338,6 @@ test('a credential-less Matrix source is reachable but not coverage', () => {
   assert.match(find(checks, 'chat: Matrix homeserver').detail, /NO CREDENTIAL/);
 });
 
-test('MATRIX_ACCESS_TOKEN makes the Matrix source credentialed', () => {
-  const s = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_ACCESS_TOKEN: 'syt_xxx' })
-    .find((x) => x.name === 'Matrix homeserver');
-  assert.equal(s.hasCredential, true);
-});
 
 // ── MCP-backed chat source ─────────────────────────────────────────────────────
 
@@ -382,4 +375,23 @@ test('an unregistered beeper MCP server says so rather than implying an outage',
     chat: [{ name: 'Beeper Desktop API', url: 'http://x', mcpServer: 'beeper', up: false, reachable: false, unauthorized: false, code: 'mcp:not-registered' }],
   });
   assert.match(find(evaluate(facts).checks, 'chat: Beeper Desktop API').detail, /not registered/);
+});
+
+test('a Matrix access token alone is NOT coverage — E2EE still blocks reading', () => {
+  // Measured: with the token bbctl already stores, 82 timeline events were m.room.encrypted
+  // against 1 readable body. Flipping this source to "usable" on a token would be exactly the
+  // false-green the credential check was added to prevent.
+  const tokenOnly = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_ACCESS_TOKEN: 'syt_x' })
+    .find(x => x.name === 'Matrix homeserver');
+  assert.equal(tokenOnly.hasCredential, false, 'a token without crypto must not count');
+
+  const ready = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_ACCESS_TOKEN: 'syt_x', MATRIX_CRYPTO_READY: '1' })
+    .find(x => x.name === 'Matrix homeserver');
+  assert.equal(ready.hasCredential, true, 'token + proven decryption does count');
+});
+
+test('MATRIX_CRYPTO_READY without a token is still not coverage', () => {
+  const s = chatSources({ MATRIX_HOMESERVER: 'https://m', MATRIX_CRYPTO_READY: '1' })
+    .find(x => x.name === 'Matrix homeserver');
+  assert.equal(s.hasCredential, false);
 });
