@@ -24,7 +24,8 @@
 // The hold is measured from `createdAt`, not "one run ago": two runs on the same morning (a manual
 // dispatch plus the 07:00 cron) must not collapse the window to minutes.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -39,6 +40,41 @@ const CANCELLED = join(OUTBOX, 'cancelled');
 
 /** Minimum time between drafting and sending. */
 export const HOLD_HOURS = 12;
+
+// Where the draft ALSO gets placed, so it is reviewable in context rather than only in a file.
+// `PATCH /v1/chats/{id}` with a `draft` field puts the text straight in that chat's composer in
+// Beeper, on every device. Two things make this the right surface:
+//   - Beeper refuses a non-empty draft when a draft already exists, so it cannot overwrite
+//     something Nathan is mid-way through typing. Failing there is correct, not an error.
+//   - It is REST, not MCP: the MCP server exposes read/send/reminders but no draft tool, so this
+//     needs a bearer token (Beeper: Settings -> Integrations -> "+"). Without BEEPER_ACCESS_TOKEN
+//     the outbox still works exactly as before and the closeout stays the review surface.
+const BEEPER_BASE = (process.env.BEEPER_API_URL || 'http://localhost:23373').replace(/\/$/, '');
+const BEEPER_TOKEN = process.env.BEEPER_ACCESS_TOKEN || '';
+
+/**
+ * Put `body` in the chat's Beeper composer. Returns a short status string; never throws, because a
+ * failure here must not lose the draft — the outbox file is the source of truth either way.
+ */
+export function pushDraftToBeeper(chatID, body, { base = BEEPER_BASE, token = BEEPER_TOKEN, exec = execFileSync } = {}) {
+  if (!token) return 'skipped: no BEEPER_ACCESS_TOKEN';
+  try {
+    const out = exec('curl', [
+      '-s', '-m', '10', '-o', '/dev/null', '-w', '%{http_code}',
+      '-X', 'PATCH', `${base}/v1/chats/${encodeURIComponent(chatID)}`,
+      '-H', 'Content-Type: application/json',
+      '-H', `Authorization: Bearer ${token}`,
+      '--data-binary', JSON.stringify({ draft: body }),
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    if (out.startsWith('2')) return 'placed in Beeper';
+    // 409/400 is the documented refusal when a draft already exists. Leave theirs alone.
+    if (out === '409' || out === '400') return `not placed (HTTP ${out}) — an existing draft was left untouched`;
+    if (out === '401' || out === '403') return `not placed (HTTP ${out}) — token rejected`;
+    return `not placed (HTTP ${out})`;
+  } catch (err) {
+    return `not placed (${(err.message || 'curl failed').slice(0, 60)})`;
+  }
+}
 
 function ensureDirs() {
   for (const d of [PENDING, SENT, CANCELLED]) mkdirSync(d, { recursive: true });
@@ -89,6 +125,7 @@ export function draft({ chat, network, to, body, item }) {
     createdAt: new Date().toISOString(),
     sendsAfter: new Date(Date.now() + HOLD_HOURS * 3600 * 1000).toISOString(),
   };
+  entry.beeperDraft = pushDraftToBeeper(entry.chat, body);
   writeFileSync(join(PENDING, `${id}.json`), JSON.stringify(entry, null, 2) + '\n');
   return entry;
 }
@@ -162,6 +199,7 @@ if (isMainModule(import.meta.url)) {
         body: typeof flags.body === 'string' ? flags.body : '', item: flags.item,
       });
       console.log(`drafted ${e.id} — sends after ${e.sendsAfter} unless cancelled`);
+      console.log(`  Beeper composer: ${e.beeperDraft}`);
     } else if (cmd === 'list') {
       show(readPending(), { json });
     } else if (cmd === 'due') {

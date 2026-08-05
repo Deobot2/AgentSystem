@@ -55,3 +55,41 @@ test('validateDraft rejects the ways a send could go wrong', () => {
 test('validateDraft caps body length', () => {
   assert.match(validateDraft({ chat: '1', network: 'x', body: 'a'.repeat(4001) }).join(), /exceeds 4000/);
 });
+
+// ── placing the draft in Beeper's composer ─────────────────────────────────────
+
+import { pushDraftToBeeper } from './life-os-outbox.js';
+
+const fakeCurl = (code) => (bin, args) => { fakeCurl.last = { bin, args }; return code; };
+
+test('no token: skipped, and the draft is still kept', () => {
+  assert.match(pushDraftToBeeper('244', 'hi', { token: '' }), /skipped: no BEEPER_ACCESS_TOKEN/);
+});
+
+test('2xx reports placed', () => {
+  assert.equal(pushDraftToBeeper('244', 'hi', { token: 't', exec: fakeCurl('200') }), 'placed in Beeper');
+});
+
+test('an existing draft is left untouched rather than treated as an error', () => {
+  // Beeper accepts a non-empty draft only when the current one is empty. Refusing is correct
+  // behaviour — it means Nathan was mid-way through typing, and his text wins.
+  assert.match(pushDraftToBeeper('244', 'hi', { token: 't', exec: fakeCurl('409') }), /left untouched/);
+  assert.match(pushDraftToBeeper('244', 'hi', { token: 't', exec: fakeCurl('400') }), /left untouched/);
+});
+
+test('a rejected token says so specifically', () => {
+  assert.match(pushDraftToBeeper('244', 'hi', { token: 'bad', exec: fakeCurl('401') }), /token rejected/);
+});
+
+test('it PATCHes the documented endpoint with a JSON draft field', () => {
+  pushDraftToBeeper('2 44/x', 'hello', { token: 't', base: 'http://h:23373', exec: fakeCurl('200') });
+  const args = fakeCurl.last.args;
+  assert.ok(args.includes('PATCH'));
+  assert.ok(args.some(a => a === 'http://h:23373/v1/chats/2%2044%2Fx'), 'chatID must be URL-encoded');
+  assert.ok(args.some(a => a === JSON.stringify({ draft: 'hello' })));
+});
+
+test('curl blowing up never throws or loses the draft', () => {
+  const boom = () => { throw new Error('curl: (7) connection refused'); };
+  assert.match(pushDraftToBeeper('244', 'hi', { token: 't', exec: boom }), /not placed/);
+});
