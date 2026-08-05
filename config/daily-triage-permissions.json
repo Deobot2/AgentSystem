@@ -23,7 +23,8 @@
     "Denials are deliberately narrow: they block the specific irreversible or outward-facing action,",
     "not the whole tool. `gh` stays usable for the GitHub sweep and for opening draft PRs; only merge",
     "and ready-for-review are blocked. Gmail stays readable and can draft; it cannot send.",
-    "NOTION, and why the list is explicit rather than a wildcard: the 2026-08-05 run reported Notion uncovered after calling `notion-list-recent-pages`, which does not exist \u2014 the connector offers search/fetch/query-*, not list-recent-pages. It got 'permissions not granted' for an unknown tool and gave up instead of falling back to notion-search, which WAS granted. The read-only surface is enumerated here so a reasonable choice lands; create-pages/update-page/move-pages stay unlisted, because stage 2 reads Notion and stage 1 is what writes to it."
+    "NOTION, and why the list is explicit rather than a wildcard: the 2026-08-05 run reported Notion uncovered after calling `notion-list-recent-pages`, which does not exist \u2014 the connector offers search/fetch/query-*, not list-recent-pages. It got 'permissions not granted' for an unknown tool and gave up instead of falling back to notion-search, which WAS granted. The read-only surface is enumerated here so a reasonable choice lands; create-pages/update-page/move-pages stay unlisted, because stage 2 reads Notion and stage 1 is what writes to it.",
+    "BEEPER IS READ-ONLY HERE, AND WAS NOT AT FIRST. This file originally allowed `mcp__beeper__*`, which includes send_message and archive_chat \u2014 directly contradicting SKILL.md STEP 3 ('read-only. Never send a message.') and the hard limit 'never archive'. A wildcard over an MCP server grants whatever that server adds later, too. Enumerated read-only instead, with the mutating tools explicitly denied so a future Beeper release cannot widen this by accident."
   ],
   "permissions": {
     "allow": [
@@ -70,7 +71,13 @@
       "mcp__claude_ai_Notion__notion-query-meeting-notes",
       "mcp__claude_ai_Notion__notion-get-comments",
       "mcp__agentsystem__*",
-      "mcp__beeper__*"
+      "mcp__beeper__get_accounts",
+      "mcp__beeper__get_chat",
+      "mcp__beeper__list_messages",
+      "mcp__beeper__search",
+      "mcp__beeper__search_chats",
+      "mcp__beeper__search_messages",
+      "mcp__beeper__search_docs"
     ],
     "deny": [
       "Bash(gh pr merge:*)",
@@ -89,7 +96,12 @@
       "mcp__claude_ai_Google_Calendar__update_event",
       "mcp__claude_ai_Google_Calendar__delete_event",
       "mcp__claude_ai_Google_Calendar__respond_to_event",
-      "mcp__claude_ai_Google_Chat__send_message"
+      "mcp__claude_ai_Google_Chat__send_message",
+      "mcp__beeper__send_message",
+      "mcp__beeper__archive_chat",
+      "mcp__beeper__set_chat_reminder",
+      "mcp__beeper__clear_chat_reminder",
+      "mcp__beeper__focus_app"
     ]
   }
 }

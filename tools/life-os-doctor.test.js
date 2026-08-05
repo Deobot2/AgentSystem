@@ -342,3 +342,41 @@ test('MATRIX_ACCESS_TOKEN makes the Matrix source credentialed', () => {
     .find((x) => x.name === 'Matrix homeserver');
   assert.equal(s.hasCredential, true);
 });
+
+// ── MCP-backed chat source ─────────────────────────────────────────────────────
+
+test('the Beeper source is resolved from the MCP registry, not a curl probe', () => {
+  // Its OAuth token lives in Claude Code's credential store, so the raw endpoint answers 401
+  // forever even when an agent session can read every chat. Probing HTTP reported a permanent
+  // outage for a working bridge.
+  const s = chatSources({ BEEPER_API_URL: 'http://x:23373' }).find(x => x.name === 'Beeper Desktop API');
+  assert.equal(s.mcpServer, 'beeper');
+  assert.equal(s.probe, undefined, 'must not carry an HTTP probe');
+});
+
+test('an authenticated beeper MCP server counts as coverage', () => {
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: [{ name: 'Beeper Desktop API', url: 'http://x', mcpServer: 'beeper', up: true, reachable: true, unauthorized: false, code: 'mcp:connected' }],
+  });
+  const { checks, softGaps } = evaluate(facts);
+  assert.equal(softGaps, 0);
+  assert.match(find(checks, 'chat: Beeper Desktop API').detail, /MCP `beeper` authenticated/);
+});
+
+test('a registered-but-unauthenticated beeper MCP server is a gap naming /mcp', () => {
+  const facts = healthyFacts({
+    expectBeeper: true,
+    chat: [{ name: 'Beeper Desktop API', url: 'http://x', mcpServer: 'beeper', up: false, reachable: true, unauthorized: true, credMissing: true, code: 'mcp:needs-auth' }],
+  });
+  const { checks, softGaps } = evaluate(facts);
+  assert.equal(softGaps, 1);
+  assert.match(find(checks, 'chat: Beeper Desktop API').detail, /NOT authenticated.*\/mcp/);
+});
+
+test('an unregistered beeper MCP server says so rather than implying an outage', () => {
+  const facts = healthyFacts({
+    chat: [{ name: 'Beeper Desktop API', url: 'http://x', mcpServer: 'beeper', up: false, reachable: false, unauthorized: false, code: 'mcp:not-registered' }],
+  });
+  assert.match(find(evaluate(facts).checks, 'chat: Beeper Desktop API').detail, /not registered/);
+});

@@ -55,6 +55,7 @@ export function gatherFacts({ hardOnly = false } = {}) {
   try { knownRepos = JSON.parse(readFileSync(join(HOME, 'agent-memory', 'nexus', 'known-repos.json'), 'utf8')); } catch { /* absent or malformed */ }
 
   const today = new Date().toISOString().slice(0, 10);
+  const mcpState = hardOnly ? 'skipped' : probeConnectors();
 
   return {
     devLink, devLinkTarget, repo, today, life: LIFE,
@@ -81,8 +82,9 @@ export function gatherFacts({ hardOnly = false } = {}) {
     // 'skipped' and null mean different things and must not collapse: 'skipped' is --hard-only
     // declining to probe, null is a probe that ran and failed. Reporting the first as the second
     // makes --hard-only claim a coverage gap that nobody has evidence for.
-    connectors: hardOnly ? 'skipped' : probeConnectors(),
-    chat: hardOnly ? null : probeChatSources(chatSources()),
+    connectors: hardOnly ? 'skipped' : mcpState,
+    // connectors is computed first on purpose: the Beeper source is resolved from it.
+    chat: hardOnly ? null : probeChatSources(chatSources(), mcpState),
     expectBeeper: /^(1|true|yes)$/i.test(process.env.LIFE_OS_EXPECT_BEEPER || ''),
   };
 }
@@ -162,10 +164,12 @@ function probeConnectors() {
 export function chatSources(env = process.env) {
   const sources = [];
   const beeper = env.BEEPER_API_URL || 'http://localhost:23373';
-  // Probe the endpoint stage 2 would actually call, not `/`. The root 302s to a landing page even
-  // when the API is unauthenticated, so probing it reports "usable" for a server that answers 401
-  // to every real request.
-  sources.push({ name: 'Beeper Desktop API', url: beeper, probe: `${beeper.replace(/\/$/, '')}/v0/mcp` });
+  // `mcpServer`, not a curl probe. Stage 2 reaches Beeper through the `beeper` MCP server, whose
+  // OAuth token lives in Claude Code's credential store — nothing curl can present. So the raw
+  // endpoint answers 401 forever even when an agent session can read every chat, and probing it
+  // reports a permanent outage for a working bridge. `claude mcp list` reports the state that
+  // actually governs access.
+  sources.push({ name: 'Beeper Desktop API', url: beeper, mcpServer: 'beeper' });
   if (env.MATRIX_HOMESERVER) {
     const hs = env.MATRIX_HOMESERVER.replace(/\/$/, '');
     // `/_matrix/client/versions` is an UNAUTHENTICATED endpoint — it answers 200 to anybody, so it
@@ -195,8 +199,23 @@ export function chatSources(env = process.env) {
  *
  * So 401/403 is reachable-but-unusable, and only that counts as coverage.
  */
-function probeChatSources(sources) {
+function probeChatSources(sources, connectors) {
   return sources.map((s) => {
+    if (s.mcpServer) {
+      // null connectors = the CLI could not be run; that is unknown, not down.
+      const state = connectors && typeof connectors === 'object' ? connectors[s.mcpServer] : undefined;
+      if (state === undefined && connectors === null) {
+        return { ...s, reachable: false, up: false, unauthorized: false, code: 'mcp:unknown' };
+      }
+      return {
+        ...s,
+        reachable: state !== undefined,
+        up: state === 'connected',
+        unauthorized: state === 'needs-auth',
+        credMissing: state === 'needs-auth',
+        code: `mcp:${state || 'not-registered'}`,
+      };
+    }
     try {
       const code = execFileSync('curl', ['-s', '-m', '5', '-o', '/dev/null', '-w', '%{http_code}', s.probe],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -290,7 +309,9 @@ export function evaluate(f) {
     const live = f.chat.filter((s) => s.up);
     for (const s of f.chat) {
       add(`chat: ${s.name}`, 'info', s.up,
-        s.up ? `usable (${s.url}, HTTP ${s.code})`
+        s.up ? (s.mcpServer ? `usable (MCP \`${s.mcpServer}\` authenticated)` : `usable (${s.url}, HTTP ${s.code})`)
+          : s.mcpServer && s.unauthorized ? `MCP \`${s.mcpServer}\` registered but NOT authenticated — run \`claude\` then \`/mcp\``
+          : s.mcpServer ? `MCP \`${s.mcpServer}\` ${s.code === 'mcp:not-registered' ? 'not registered' : s.code}`
           : s.credMissing ? `host is up (HTTP ${s.code}) but NO CREDENTIAL — reachability is not coverage`
           : s.unauthorized ? `reachable but UNAUTHENTICATED (HTTP ${s.code}) — stage 2 cannot read it`
           : `unreachable (${s.url})`,
