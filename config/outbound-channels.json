@@ -1,0 +1,56 @@
+{
+  "_comment": [
+    "Outbound policy for the daily triage, one row per channel. Read by skills/daily-triage/SKILL.md",
+    "STEP 5b. This file exists so the send/no-send decision is a LOOKUP, never an inference: asking a",
+    "model at 07:00 'is this work or personal?' is exactly the judgement that fails silently and",
+    "confidently, and it already failed once — Messenger was misread as personal from display names",
+    "when it is in fact JCR treasurer comms.",
+    "",
+    "THE RULE IS UNIFORM: nothing is ever sent by the run that composed it. Every outbound message is",
+    "drafted, appears in the closeout in full, and is sent by the NEXT run unless cancelled. `mode`",
+    "only decides what happens after that hold expires.",
+    "",
+    "  send       — drafted, then sent automatically by the next run after the 12h hold",
+    "  draft-only — drafted and surfaced for a human to send; never sent by the pipeline",
+    "",
+    "`draft-only` is sometimes policy and sometimes physics — see gmail, where the connector has no",
+    "send tool at all. The `reason` field says which, because those are not the same thing and a",
+    "future reader will want to know whether flipping the mode is even possible."
+  ],
+
+  "holdHours": 12,
+  "maxDraftsPerRun": 3,
+
+  "channels": {
+    "messenger": {
+      "mode": "send",
+      "reason": "JCR treasurer comms — official business."
+    },
+    "whatsapp": {
+      "mode": "send",
+      "scope": "groups whose topic is society/committee business (DUE, UCTEC and similar). Never a 1:1.",
+      "reason": "Society business. 1:1 WhatsApp is personal and stays out of scope."
+    },
+    "linkedin": {
+      "mode": "send",
+      "reason": "Requested twice, explicitly. Enabled on that instruction.",
+      "risk": "HIGHEST of any channel here. Automated messaging breaches LinkedIn's user agreement, they detect it, and this account is reached through mautrix-linkedin — an unofficial cookie session. A ban costs the bridge AND the account. Flip to draft-only if that trade stops looking worth it."
+    },
+    "instagram": {
+      "mode": "draft-only",
+      "reason": "Policy, not capability. Nathan's earlier split was explicit: send on work channels, 'reading and drafting personal messages' only. Instagram is personal. One word here flips it to send."
+    },
+    "gmessages": {
+      "mode": "draft-only",
+      "reason": "Policy. SMS reaches people who never opted into being messaged by software, and there is no thread context to judge tone from."
+    },
+    "discord": {
+      "mode": "draft-only",
+      "reason": "Policy. Discord bans aggressively for user-token automation, and outbound is the detectable part. Reading is already the risk being accepted."
+    },
+    "gmail": {
+      "mode": "draft-only",
+      "reason": "PHYSICS, not policy. The Gmail connector exposes create_draft/update_draft/list_drafts and no send tool of any kind — verified against the live tool list. A draft is created in Gmail and Nathan sends it. Deferred send would need a different transport (SMTP, or the Gmail API with a send scope), which is a separate piece of work."
+    }
+  }
+}
