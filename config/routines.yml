@@ -103,11 +103,17 @@
 # Task Scheduler manually or via setup-scheduled-tasks.ps1" on a Linux host (#200). The compile
 # step lying about enforcement was the defect; the dead routines were the symptom.
 
-# NO WORKFLOW JOB EXISTS FOR THIS ONE. `routines.js compile --verify` fails on it by design and
-# will keep failing until a human decides which way to resolve it — adding a Saturday job to
-# scheduled-tasks.yml means committing to a weekly headless model run, which is a cost decision,
-# not a mechanical fix. The alternative is `node tools/routines.js disable weekly-agent-review`.
-# Leaving it enforce:hard-and-unregistered is the #200 defect, so it is tracked, not hidden.
+# DISABLED — no workflow job exists for this one, so nothing can fire it.
+#
+# Kept in the registry rather than deleted, because the intent is still worth having: a weekly
+# review of routing misroutes, session costs, blockers and the goal scorecard. What is missing is
+# the decision to pay for it — adding a Saturday job to scheduled-tasks.yml commits to a weekly
+# unattended opus run, which is a spending call, not a mechanical fix.
+#
+# It is `enabled: false` and not `enforce: hard`-while-unregistered on purpose. A routine that
+# claims enforcement nothing can deliver is the #200 defect itself; disabled-and-documented is the
+# honest state. To turn it on: add a `weekly-agent-review` job to the workflow, then
+# `node tools/routines.js enable weekly-agent-review`. `verify` will hold you to both.
 - id: weekly-agent-review
   description: Saturday agent fleet review (goal scorecard, risk scan, agent performance)
   trigger: schedule
@@ -115,7 +121,7 @@
   schedule: "0 9 * * 6"
   task_name: AgentSystem-WeeklyAgentReview
   enforce: hard
-  enabled: true
+  enabled: false
   action: "Weekly agent review (headless Jarvis via `claude --bg`): review routing-log.jsonl misroutes, session costs (node ~/dev/AgentSystem/tools/session-cost.js --week), open blockers, and goal scorecard. Log outcome via decision-log.js."
 
 - id: weekly-brain-review

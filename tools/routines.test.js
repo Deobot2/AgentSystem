@@ -217,15 +217,30 @@ test('verifyCronRoutines: no cron routines means nothing to verify', () => {
   assert.deepEqual(verifyCronRoutines([], { workflowText: null }), []);
 });
 
-test('the live routines.yml has at most one unregistered cron routine', () => {
-  // weekly-agent-review is knowingly unregistered and documented as a pending human decision
-  // (add the Saturday job, or disable the routine). This test is here so a SECOND one cannot be
-  // added silently, and so it fails loudly the moment that decision is made either way.
+test('every enabled cron routine in the live routines.yml is registered', () => {
+  // Guards the #200 defect in both directions: a routine claiming enforcement nothing can fire,
+  // and a workflow job whose cron silently drifts from the registry. `weekly-agent-review` was the
+  // last offender and is now `enabled: false` with the reason recorded in routines.yml.
   const routines = parseRoutinesYml(readFileSync(new URL('../config/routines.yml', import.meta.url), 'utf8'));
-  const problems = verifyCronRoutines(routines);
   assert.deepEqual(
-    problems.map(p => p.id),
-    ['weekly-agent-review'],
-    'cron routines and scheduled-tasks.yml have drifted apart — run `node tools/routines.js verify`',
+    verifyCronRoutines(routines).map(p => p.id),
+    [],
+    'cron routines and scheduled-tasks.yml have drifted — run `node tools/routines.js verify`',
+  );
+});
+
+
+test('compile output does not depend on machine-local bypasses', () => {
+  // .agents/rules/routines.generated.md is tracked in git; routine-overrides.json is local state.
+  // compile() used to filter by overrides, so compiling on a host with a stale bypass committed
+  // the removal of two `enforce: hard` routines for everyone.
+  const routines = parseRoutinesYml(readFileSync(new URL('../config/routines.yml', import.meta.url), 'utf8'));
+  const enabledAgentRules = routines.filter(r => r.mechanism === 'agent-rule' && r.enabled).map(r => r.id);
+  const generated = readFileSync(new URL('../.agents/rules/routines.generated.md', import.meta.url), 'utf8');
+  const inFile = [...generated.matchAll(/^-\s+\*\*([\w-]+)\*\*/gm)].map(m => m[1]);
+  assert.deepEqual(
+    inFile.sort(),
+    enabledAgentRules.sort(),
+    'the generated file must mirror the registry exactly — no local bypass may leak into it',
   );
 });

@@ -154,9 +154,19 @@ function cmdCompile({ verify = false } = {}) {
   const routines = parseRoutinesYml(text);
   const overrides = readOverrides();
 
-  const agentRules = routines.filter(r =>
-    r.mechanism === 'agent-rule' && r.enabled && !overrides[r.id]
-  );
+  // Registry state ONLY — deliberately not filtered by `overrides`.
+  //
+  // .agents/rules/routines.generated.md is tracked in git, and routine-overrides.json is
+  // machine-local runtime state. Filtering here baked one machine's bypasses into the shared
+  // artifact: compiling on a host that had `always-worktree` and `fix-pr-until-green` bypassed
+  // (one of them a `session: true` bypass from three weeks earlier that nothing ever cleared)
+  // silently dropped two `enforce: hard` routines from the file every session reads — for every
+  // machine, permanently, via a commit.
+  //
+  // Bypass still means "the text is not injected", as documented at the top of routines.yml. That
+  // suppression now happens where the local state belongs: hooks/routines-context-inject.js
+  // filters bypassed ids at injection time.
+  const agentRules = routines.filter(r => r.mechanism === 'agent-rule' && r.enabled);
 
   // #122: compact 1-2 line-per-routine format (id/enforce + action only). Full prose
   // (description) stays in config/routines.yml itself and `node tools/routines.js list` —

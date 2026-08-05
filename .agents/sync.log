@@ -2424,3 +2424,17 @@
 [2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] Syncing: wanda
 [2026-08-03T19:19:07.437Z] [INFO] [sync-agents.js] same wanda
 [2026-08-03T19:19:07.437Z] [SUCCESS] [sync-agents.js] in sync — all 12 installed agent definitions match the repo
+[2026-08-05T00:06:20.283Z] [INFO] [sync-agents.js] Checking agent drift (repo vs installed) — no files will be written...
+[2026-08-05T00:06:20.284Z] [INFO] [sync-agents.js] same astra
+[2026-08-05T00:06:20.284Z] [INFO] [sync-agents.js] same clarification-needed
+[2026-08-05T00:06:20.285Z] [INFO] [sync-agents.js] same friday
+[2026-08-05T00:06:20.286Z] [INFO] [sync-agents.js] same jarvis
+[2026-08-05T00:06:20.286Z] [INFO] [sync-agents.js] same leo
+[2026-08-05T00:06:20.286Z] [INFO] [sync-agents.js] same nat
+[2026-08-05T00:06:20.287Z] [INFO] [sync-agents.js] same pym
+[2026-08-05T00:06:20.287Z] [INFO] [sync-agents.js] same r2d2
+[2026-08-05T00:06:20.288Z] [INFO] [sync-agents.js] same sam
+[2026-08-05T00:06:20.288Z] [INFO] [sync-agents.js] same threepio
+[2026-08-05T00:06:20.288Z] [INFO] [sync-agents.js] same ultron
+[2026-08-05T00:06:20.289Z] [INFO] [sync-agents.js] same wanda
+[2026-08-05T00:06:20.289Z] [SUCCESS] [sync-agents.js] in sync — all 12 installed agent definitions match the repo
