@@ -86,10 +86,21 @@ test('it PATCHes the documented endpoint with a JSON draft field', () => {
   const args = fakeCurl.last.args;
   assert.ok(args.includes('PATCH'));
   assert.ok(args.some(a => a === 'http://h:23373/v1/chats/2%2044%2Fx'), 'chatID must be URL-encoded');
-  assert.ok(args.some(a => a === JSON.stringify({ draft: 'hello' })));
+  assert.ok(args.some(a => a === JSON.stringify({ draft: { text: 'hello' } })));
 });
 
 test('curl blowing up never throws or loses the draft', () => {
   const boom = () => { throw new Error('curl: (7) connection refused'); };
   assert.match(pushDraftToBeeper('244', 'hi', { token: 't', exec: boom }), /not placed/);
+});
+
+test('draft is sent as an OBJECT, and null clears', () => {
+  // The API rejects {"draft":"text"} with VALIDATION_ERROR "expected object, received string".
+  // Worse, an unknown key like {"draftText":"..."} returns 200 and silently does nothing — so a
+  // 2xx is not proof the draft landed. Verified live by reading the draft back off the chat.
+  pushDraftToBeeper('9', 'hello', { token: 't', exec: fakeCurl('200') });
+  assert.ok(fakeCurl.last.args.includes(JSON.stringify({ draft: { text: 'hello' } })));
+
+  pushDraftToBeeper('9', null, { token: 't', exec: fakeCurl('200') });
+  assert.ok(fakeCurl.last.args.includes(JSON.stringify({ draft: null })), 'null must clear, not wrap');
 });

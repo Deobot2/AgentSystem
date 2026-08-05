@@ -74,10 +74,14 @@ jobs:
       # same account's homeserver on Beeper's own infrastructure, which is not.
       BEEPER_API_URL: ${{ vars.BEEPER_API_URL || 'http://localhost:23373' }}
       MATRIX_HOMESERVER: ${{ vars.MATRIX_HOMESERVER || '' }}
-      # Deliberately NOT set to 1 yet: both endpoints answer, but stage 2 has no API token and no
-      # Matrix credentials, so it still cannot actually read a message. Turning this on now would
-      # report chat as covered while nothing can read it — the exact false-green STEP 3 forbids.
-      # Flip it once the skill authenticates (#216).
+      # A SECRET, never a `vars.` entry: the step's env block is echoed into the run log, and
+      # this repo is public. Secrets are masked as ***; variables are printed verbatim. It is a
+      # bearer token for the whole chat history plus send capability.
+      # Enables STEP 5b to place each draft in the Beeper composer (PATCH /v1/chats/{id}).
+      BEEPER_ACCESS_TOKEN: ${{ secrets.BEEPER_ACCESS_TOKEN }}
+      # Now set to 1: the `beeper` MCP server is authenticated and BEEPER_ACCESS_TOKEN exists, so
+      # stage 2 can genuinely read chat (verified: 30 unread across six networks) and place drafts.
+      # With coverage real, a chat outage should report as a gap rather than an accepted note.
       LIFE_OS_EXPECT_BEEPER: ${{ vars.LIFE_OS_EXPECT_BEEPER || '' }}
     steps:
       # No checkout: daily-triage is one of the private life-OS skills gitignored by #187, so it

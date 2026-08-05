@@ -64,7 +64,11 @@ export function pushDraftToBeeper(chatID, body, { base = BEEPER_BASE, token = BE
       '-X', 'PATCH', `${base}/v1/chats/${encodeURIComponent(chatID)}`,
       '-H', 'Content-Type: application/json',
       '-H', `Authorization: Bearer ${token}`,
-      '--data-binary', JSON.stringify({ draft: body }),
+      // `draft` is an OBJECT, not a string: sending {"draft":"text"} returns
+      // VALIDATION_ERROR "expected object, received string". Note also that an unknown key such as
+      // {"draftText":"..."} returns 200 while doing nothing at all, so a 2xx here is not by itself
+      // proof the draft landed — the shape has to be right.
+      '--data-binary', JSON.stringify({ draft: body === null ? null : { text: body } }),
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     if (out.startsWith('2')) return 'placed in Beeper';
     // 409/400 is the documented refusal when a draft already exists. Leave theirs alone.
