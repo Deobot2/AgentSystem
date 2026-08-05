@@ -5,8 +5,13 @@ name: Sam Security Audit
 #   is ready immediately — without this, a non-draft PR that never gets the ready-to-merge label
 #   or a draft->ready transition would merge un-audited.
 # - `ready_for_review`: covers the draft->ready transition.
-# - `labeled` (gated to `ready-to-merge` in the job `if:` below): lets a human re-request the
-#   audit at merge time on a PR that's already open (e.g. after addressing feedback).
+# - `labeled` is GONE (#228). It existed to let a human re-request an audit after addressing
+#   feedback — but addressing feedback means pushing, and `synchronize` now covers that. Keeping it
+#   had two costs and no benefit: with no job-level `if:` every routine label (`documentation`,
+#   `priority:high`) would fire a full Claude audit plus a duplicate "ready to merge" comment, and
+#   any label-triggered early-exit would emit a PASSING check that overwrites a blocking one for the
+#   same SHA — reintroducing the bypass in a new shape. To force a re-audit without pushing, re-run
+#   the workflow from the Actions UI. Nothing else in the repo reads `ready-to-merge`.
 # `synchronize` IS a trigger as of #228, reversing the #164 decision above. Measured on PR #229:
 # pushing a commit correctly left the PR BLOCKED (no check for the new SHA) — but adding ANY label
 # then made the job skip, and GitHub counts a SKIPPED required check as SATISFIED, flipping the PR
@@ -21,7 +26,7 @@ name: Sam Security Audit
 # still reports success without spending an audit run.
 on:
   pull_request:
-    types: [opened, ready_for_review, labeled, synchronize]
+    types: [opened, ready_for_review, synchronize]
     branches: [main, dev]
 
 # New push to branch cancels in-flight audit — re-runs fresh
