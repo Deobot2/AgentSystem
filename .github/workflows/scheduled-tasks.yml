@@ -132,6 +132,12 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "${LIFE_REPO:-$HOME/life}/briefings" "${LIFE_REPO:-$HOME/life}/closeouts"
+          # Warn, not fail: the fallback works and has been carrying every run, so hard-failing here
+          # would turn a silent-but-correct default into a real outage. It is still worth saying out
+          # loud, because nothing verifies that this path is the one MC's GET /briefing reads.
+          if [ -z "${LIFE_REPO:-}" ]; then
+            echo "::warning::LIFE_REPO is unset, so the closeout path falls back to $HOME/life. Set the LIFE_REPO repo variable to whatever tools/mission-control/README.md documents, so the two cannot drift apart unnoticed."
+          fi
           if ! node "$REPO/tools/life-os-doctor.js" --alert; then
             echo "::error::daily-triage preflight found blocking gaps — see the table above."
             action=$(cat <<EOF
@@ -157,12 +163,21 @@ jobs:
             exit 1
           fi
 
+      # Retried, because a 529 is documented as temporary and treating it as "the triage is down"
+      # was wrong: eight of the twelve scheduled runs between 2026-07-31 and 2026-08-05 died that
+      # way (#234). The second-order cost was worse than the missed runs — each failure raised
+      # `daily-triage-down` and the next success auto-closed it, so the alert flapped and a genuine
+      # outage looked exactly like a minute of upstream overload.
+      #
+      # Retry ONLY on signals that are actually transient. A permissions rejection, a missing skill
+      # or a bad agent name is deterministic; retrying those burns the window and delays the alert.
+      # The 13:00/05:00 schedule leaves roughly 16h, so 60s + 300s of backoff costs nothing.
       - name: Run Life OS daily triage (Jarvis)
         shell: bash
         env:
           REPO: ${{ steps.repo.outputs.repo }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # The skill writes the closeout itself (step 6) rather than this job capturing stdout:
           # it needs the file on disk before it pushes the notification, and a --bg subagent fan-out
           # means stdout is no longer a faithful transcript of the run.
@@ -186,11 +201,41 @@ jobs:
           # --settings: a reviewed allow/deny list, NOT --dangerously-skip-permissions. See the
           # header of config/daily-triage-permissions.json for why, and note the deny list turns the
           # skill's "hard limits" prose into rules the harness actually enforces.
-          claude --agent Jarvis \
-            --add-dir "${LIFE_REPO:-$HOME/life}" \
-            --add-dir "$REPO" \
-            --settings "$REPO/config/daily-triage-permissions.json" \
-            -p "Use the daily-triage skill and execute it now."
+          log="${RUNNER_TEMP:-/tmp}/daily-triage.log"
+          attempts=3
+          rc=1
+          attempt=1
+          while [ "$attempt" -le "$attempts" ]; do
+            echo "::group::daily-triage attempt $attempt of $attempts"
+            claude --agent Jarvis \
+              --add-dir "${LIFE_REPO:-$HOME/life}" \
+              --add-dir "$REPO" \
+              --settings "$REPO/config/daily-triage-permissions.json" \
+              -p "Use the daily-triage skill and execute it now." 2>&1 | tee "$log"
+            rc=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            [ "$rc" -eq 0 ] && break
+            if ! grep -Eqi 'API Error: (429|500|502|503|504|529)|Overloaded|Connection error|ECONNRESET|connection reset' "$log"; then
+              echo "::error::daily-triage failed with a non-transient error (exit $rc). Not retrying — see the log above."
+              break
+            fi
+            # Increment only when we are actually going round again, so $attempt below is the
+            # number of tries made rather than one past it.
+            [ "$attempt" -ge "$attempts" ] && break
+            if [ "$attempt" -eq 1 ]; then backoff=60; else backoff=300; fi
+            echo "::warning::transient upstream error (exit $rc) on attempt $attempt — retrying in ${backoff}s"
+            sleep "$backoff"
+            attempt=$((attempt + 1))
+          done
+
+          # Hand the failure step something specific, so "overloaded all day" stops looking
+          # identical to "the connector expired" in the human-needed issue.
+          last=$(grep -Eio 'API Error: [0-9]{3}[^"]{0,80}|Connection error[^"]{0,80}|ECONNRESET' "$log" 2>/dev/null | tail -1 | tr -d '\r' | cut -c1-160)
+          {
+            echo "TRIAGE_ATTEMPTS=$attempt"
+            echo "TRIAGE_LAST_ERROR=${last:-no upstream error line captured}"
+          } >> "$GITHUB_ENV"
+          exit "$rc"
 
       # Loud on failure by design. A silent no-op is the failure mode that hurts: you find out
       # at lunch. A red run alone was not enough — it emails the hub inbox, which stage 1 triages the
@@ -231,7 +276,7 @@ jobs:
         run: |
           node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
             --title "[Life OS]: the daily triage is failing" \
-            --why "Preflight passed but the run failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." \
+            --why "Preflight passed but the run failed on \`$(hostname)\` after ${TRIAGE_ATTEMPTS:-1} attempt(s). Last upstream error: \`${TRIAGE_LAST_ERROR:-none captured}\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Three attempts all failing on a 429/529 means upstream was overloaded for the whole window; anything else means the run itself is broken." \
             --action "Read the run log. The usual causes are an expired interactive MCP connector (Notion/Gmail/Calendar/Drive) in this host's \`~/.claude\`, Beeper Desktop not listening on localhost:23373, or the skill erroring before it wrote the closeout. Re-run with \`gh workflow run scheduled-tasks.yml -f job=daily-triage\` once fixed; this issue closes itself on the next successful run." \
             || echo "::warning::could not raise the human-needed alert"
 
