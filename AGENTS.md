@@ -167,9 +167,11 @@ Commands:
 - Query: `node ~/dev/AgentSystem/tools/graph/graph-query.js <brain> <keywords>`
 - Episodic patterns (SONA): append to `~/agent-memory/nexus/sona-patterns.md`
 
-Relevant memory is auto-injected into sessions via SessionStart/SubagentStart hooks. Jarvis persists a session summary on shutdown (step 9 of the startup checklist). The old `.agents/memory/*.md` files are deprecated (#117); the archived copies under
-`docs/archive/agents-memory/` were removed from HEAD in #213 — no tool read them, and this repo is
-public. They remain reachable in git history; the purge is tracked in #214.
+Relevant memory is auto-injected into sessions via SessionStart/SubagentStart hooks. Jarvis persists a session summary on shutdown (step 9 of the startup checklist). The old `.agents/memory/*.md` files are deprecated (#117) and no longer present — no tool read them.
+
+**This repo is public, and a commit is forever.** Deleting a file from HEAD does not remove its
+contents from history. Keep third-party details, client identifiers, and infrastructure specifics
+out of anything committed here, including scratch notes and decision logs.
 
 ---
 
