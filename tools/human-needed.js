@@ -143,14 +143,17 @@ export function raise({ key, title, why, action, extraLabels = [], assignee, sou
 }
 
 export function resolve({ key, comment, dryRun }) {
-  if (dryRun) {
-    console.log(`[dry-run] would close the open alert keyed ${key}`);
-    return { action: 'dry-run' };
-  }
+  // Look before reporting. This used to return inside the dryRun branch before checking, so
+  // `actions-watchdog.js --dry-run` announced "would close the open alert keyed actions-down"
+  // whether or not any alert was open — a phantom outage to chase during a real one.
   const existing = findByMarker(openAlerts(), key);
   if (!existing) {
     console.log(`no open alert keyed ${key} — nothing to resolve`);
     return { action: 'none' };
+  }
+  if (dryRun) {
+    console.log(`[dry-run] would close the open alert keyed ${key} (${existing.url})`);
+    return { action: 'dry-run', url: existing.url, number: existing.number };
   }
   const body = comment || `Unblocked as of ${new Date().toISOString()} — closing automatically.`;
   gh(['issue', 'close', String(existing.number), '--comment', body]);

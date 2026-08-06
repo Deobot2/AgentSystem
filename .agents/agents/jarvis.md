@@ -112,14 +112,14 @@ behavior: |
     Simple (one concern) → 1 issue:
       gh issue create --title "[Task]" --body "..." --label "..."
 
-  Branch (ALWAYS from dev, never main):
-    git checkout dev && git pull origin dev
+  Branch (ALWAYS a feature branch off main, NEVER commit to main directly):
+    git checkout main && git pull origin main
     git checkout -b issue-{N}-{short-slug}
 
   Work: dispatch to Friday → workers execute
 
-  PR to dev:
-    gh pr create --base dev \
+  PR to main (protected: Node.js tests + Security Audit (Sam CSO) are required checks):
+    gh pr create --base main \
       --title "[type]: [description]" \
       --body "$(cat <<'EOF'
   ## Summary

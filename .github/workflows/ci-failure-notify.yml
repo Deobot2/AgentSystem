@@ -2,7 +2,9 @@ name: CI Failure Notifier
 
 on:
   workflow_run:
-    workflows: [test.yml]
+    # `workflows:` matches a workflow's `name:`, NOT its filename. This said `test.yml`, which
+    # matches nothing, so this notifier never fired once since it was added. test.yml is `Tests`.
+    workflows: [Tests]
     types: [completed]
 
 permissions:
@@ -65,11 +67,8 @@ jobs:
           # Post the comment
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$comment_body"
 
-      - name: Add label to PR
-        if: steps.pr.outputs.pr_number != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label ci:failing || true
+      # There was an `--add-label ci:failing` step here. It is deleted rather than fixed: no workflow,
+      # tool or query in this repo reads that label, nothing ever removed it, and the fix above is the
+      # first thing that would have made it fire. Enabling it would have stamped a permanent, wrong
+      # `ci:failing` on every PR that failed once. GitHub's own check status already shows this
+      # accurately and clears itself.

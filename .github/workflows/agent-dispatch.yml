@@ -12,6 +12,16 @@ on:
   pull_request:
     types: [ready_for_review]
 
+# Every job here writes back to the issue/PR: comments, labels, and `gh pr merge`. This workflow
+# shipped with no permissions block at all, and the repo's default_workflow_permissions is `read`
+# (`gh api repos/:owner/:repo/actions/permissions/workflow`), so `ambient-sam-review` died with
+# 403 "Resource not accessible by integration" posting its own result comment after the scan had
+# already succeeded — a red X that reads like a code failure but is not.
+#
+# Scoped per job rather than workflow-wide: only `auto-merge` needs `contents: write`, and a
+# workflow-level grant would hand that to the two jobs that run untrusted PR content through a
+# model. `tests/workflow_permissions.test.js` fails the build if a writing job loses its scopes.
+
 # Only one agent dispatch per issue/PR at a time
 concurrency:
   group: agent-dispatch-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -23,6 +33,10 @@ jobs:
     # tools/mission-control/install-runner.sh). BOTH labels required so only the
     # Linux runner picks this up.
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+      issues: write          # createComment, addLabels, removeLabel
+      pull-requests: write   # createComment on a PR conversation
     # Trigger on:
     #   agent:* label on issue
     #   /agent <name> comment (issue or PR) from repo owner
@@ -328,6 +342,9 @@ jobs:
 
   ambient-sam-review:
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+      pull-requests: write   # posts the scan result as a PR comment
     # Quick Haiku-tier security scan on every PR marked ready for review.
     # Full Sonnet audit by Sam is still required before any merge to main.
     # Trigger on ready_for_review only (not opened) to avoid draft noise.
@@ -358,16 +375,29 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git diff "$BASE_SHA" "$HEAD_SHA" --stat > "$RUNNER_TEMP/diff-stat.txt" 2>&1 || true
-          git diff "$BASE_SHA" "$HEAD_SHA" -- '*.js' '*.ts' '*.py' '*.yml' '*.yaml' '*.json' > "$RUNNER_TEMP/pr-diff-full.txt" 2>&1 || true
+          # No `2>&1` on the diff redirects: it put git's own error text INSIDE the file that
+          # becomes the scan prompt, so a failed diff read as reviewable content.
+          git diff "$BASE_SHA" "$HEAD_SHA" --stat > "$RUNNER_TEMP/diff-stat.txt" || true
+          git diff "$BASE_SHA" "$HEAD_SHA" -- '*.js' '*.ts' '*.py' '*.yml' '*.yaml' '*.json' > "$RUNNER_TEMP/pr-diff-full.txt" || true
           # Truncate to ~8000 chars — Haiku context is sufficient and keeps tokens down.
           head -c 8000 "$RUNNER_TEMP/pr-diff-full.txt" > "$RUNNER_TEMP/pr-diff.txt"
           if [ "$(wc -c < "$RUNNER_TEMP/pr-diff-full.txt")" -gt 8000 ]; then
             printf '\n...(truncated)\n' >> "$RUNNER_TEMP/pr-diff.txt"
           fi
+          # A docs-only PR matches none of the globs above, so the filtered diff is empty. Handing
+          # Sam an empty diff made it answer with a QUESTION ("paste the diff?"), which the post
+          # step then classified as "issues detected" and commented on the PR — a false positive on
+          # every .md-only PR. Nothing security-relevant changed, so skip the scan entirely.
+          if [ ! -s "$RUNNER_TEMP/pr-diff.txt" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No code-file changes in this PR — skipping ambient scan."
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Sam ambient scan (Haiku)
         id: sam_scan
+        if: steps.diff.outputs.empty != 'true'
         shell: bash
         # Untrusted PR url/title via env, not interpolated.
         env:
@@ -394,6 +424,7 @@ jobs:
         continue-on-error: true
 
       - name: Post scan result as PR comment
+        if: steps.diff.outputs.empty != 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -414,6 +445,9 @@ jobs:
 
   auto-merge:
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: write        # gh pr merge --squash --delete-branch
+      pull-requests: write   # gh pr comment, gh pr merge
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
