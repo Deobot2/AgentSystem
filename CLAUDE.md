@@ -25,8 +25,11 @@ Hooks are Claude Code only — there is no Antigravity equivalent, so every hook
 inert in an `agy` session (#240). Adding a hook therefore adds an Antigravity gap: record it in
 `docs/harness-support.md`, which `tests/harness-support.test.js` enforces.
 
-Not registered on purpose: `tool-output-compress.js`. PostToolUse can only append context, never
-replace a tool result — it cost ~800 tok per large Bash output while claiming to save.
+`tool-output-compress.js` was deleted in `4adeab6` (2026-07-26). Its PostToolUse implementation
+could only **append**, so compressing a large output meant keeping the original and adding a
+summary on top — measured at +3218 chars on a 10,000-char output. PostToolUse can now **replace** a
+result via `hookSpecificOutput.updatedToolOutput` (confirmed against the hook docs, Aug 2026), so a
+redo would actually save. Nobody has asked for one — don't build it on spec.
 
 ## Memory
 Root `~/agent-memory/nexus/` — shared by Claude and Antigravity.
