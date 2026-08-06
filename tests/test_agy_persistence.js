@@ -124,3 +124,17 @@ test('agy-persistence: session metadata structure on direct spawn', async () => 
     }
   }
 });
+
+// persistenceMode() is what /health and the panel badge read to decide whether agy
+// sessions are really persistent. Anchor it to the same fact the spawn path branches
+// on — tmux being runnable — so the badge cannot report 'tmux' on a host where every
+// session is actually a detached child nothing can attach to.
+test('agy-persistence: persistenceMode reports tmux only when tmux runs', async () => {
+  const { persistenceMode } = await import('../tools/mission-control/agy-persistence.js');
+  const { spawnSync } = await import('node:child_process');
+  const probe = spawnSync('tmux', ['-V'], { stdio: 'ignore' });
+  const expected = !probe.error && probe.status === 0 ? 'tmux' : 'direct';
+
+  assert.equal(persistenceMode(), expected);
+  assert.equal(persistenceMode(), expected, 'the cached second call agrees with the first');
+});
