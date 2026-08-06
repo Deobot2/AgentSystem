@@ -34,6 +34,7 @@ import { SessionRegistry } from './session-registry.js';
 import { validateRepo } from './repo-validator.js';
 import { claudeBgArgs } from './claude-args.js';
 import { spawnAgyPersistent } from './agy-dispatcher.js';
+import { persistenceMode } from './agy-persistence.js';
 import { ipAllowed as ipAllowedFor, normalizeIp } from './ip-utils.js';
 import { lanAddresses, publicBaseUrl } from './url-utils.js';
 import { publish as publishEvent } from '../event-bus.js';
@@ -453,35 +454,51 @@ function runClaude(args, timeoutMs = CLAUDE_TIMEOUT_MS) {
   });
 }
 
-// The panel polls /sessions every 15s. Without a cache each poll paid the full
-// ~13s CLI cold start, so the panel was never less than 13s stale and kept a
-// claude process resident more or less permanently. Serve the last good roster
-// immediately and refresh in the background instead.
-const ACTIVE_TTL_MS = 30_000;
-let activeCache = { at: 0, data: [] };
-let activeInflight = null;
+// The panel polls on a timer, and every poll used to pay the full cost of shelling
+// out — ~13s of CLI cold start for /sessions, ~3.3s of two gh calls for /pipelines.
+// So the panel was never fresher than that, and it kept a subprocess resident more
+// or less permanently.
+//
+// Serve the last good value immediately and refresh behind it. The in-flight guard
+// matters as much as the TTL: without it, N concurrent pollers arriving on a cold
+// cache each spawn their own subprocess.
+//
+// `fetchFn` returning undefined means "keep the last good value" — used for a parse
+// failure, where blanking the panel is worse than showing something slightly stale.
+function cachedFetcher(ttlMs, fetchFn, seed) {
+  let cache = { at: 0, data: seed };
+  let inflight = null;
 
-function refreshActiveSessions() {
-  if (activeInflight) return activeInflight;
-  activeInflight = runClaude(['agents', '--json'])
-    .then(({ out }) => {
-      try {
-        const parsed = JSON.parse(out);
-        // Keep the last good roster on a parse failure rather than blanking the panel.
-        if (Array.isArray(parsed)) activeCache = { at: Date.now(), data: parsed };
-      } catch { /* keep last good */ }
-      return activeCache.data;
-    })
-    .finally(() => { activeInflight = null; });
-  return activeInflight;
+  function refresh() {
+    if (inflight) return inflight;
+    inflight = Promise.resolve()
+      .then(fetchFn)
+      .then((data) => {
+        if (data !== undefined) cache = { at: Date.now(), data };
+        return cache.data;
+      })
+      .catch(() => cache.data)
+      .finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function get() {
+    if (Date.now() - cache.at < ttlMs) return cache.data;
+    const pending = refresh();
+    // Nothing cached yet (first request after boot) — no choice but to wait.
+    return cache.at ? cache.data : pending;
+  }
+  get.refresh = refresh;
+  return get;
 }
 
-async function getActiveSessions() {
-  if (Date.now() - activeCache.at < ACTIVE_TTL_MS) return activeCache.data;
-  const pending = refreshActiveSessions();
-  // Nothing cached yet (first request after boot) — no choice but to wait.
-  return activeCache.at ? activeCache.data : pending;
-}
+const getActiveSessions = cachedFetcher(30_000, async () => {
+  const { out } = await runClaude(['agents', '--json']);
+  try {
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch { return undefined; }
+}, []);
 
 async function getAgentLog(shortId) {
   // Was 5s, which is shorter than the CLI's own cold start — so this always
@@ -596,7 +613,7 @@ function rollupState(rollup) {
   return 'passing';
 }
 
-async function getPipelines() {
+async function fetchPipelines() {
   const result = { repo: GH_REPO, runner: null, prs: [], generatedAt: new Date().toISOString() };
 
   const r1 = await runGh(['api', `repos/${GH_REPO}/actions/runners`]);
@@ -634,6 +651,11 @@ async function getPipelines() {
   }
   return result;
 }
+
+// Same 30s window as /sessions. fetchPipelines never throws — it reports failures in
+// `runner.error` / `prsError` — so an outage is cached too, and clears within one TTL
+// once gh recovers. `generatedAt` is the fetch time, so the panel can show its own age.
+const getPipelines = cachedFetcher(30_000, fetchPipelines, null);
 
 // ── GitHub webhook router ─────────────────────────────────────────────────────
 
@@ -1062,6 +1084,9 @@ async function handleRequest(req, res) {
       active_sessions: runningSessions.length,
       platform: process.platform,
       node_version: process.version,
+      // 'direct' means tmux is missing, so agy sessions cannot be attached to or
+      // reattached after a restart. The server still runs; it is degraded, not down.
+      agy_persistence: persistenceMode(),
     });
   }
 
@@ -1444,7 +1469,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  Panel:   http://${HOST}:${PORT}/panel?key=<key>`);
   console.log(`  Key:     ${SECRET.slice(0,8)}...${SECRET.slice(-4)}\n`);
   // Pay the CLI cold start once at boot so the first /sessions hit is warm.
-  refreshActiveSessions();
+  getActiveSessions.refresh();
   if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
     console.warn(
       `  WARNING: bound to ${HOST}, not loopback-only. Anyone who can reach this ` +

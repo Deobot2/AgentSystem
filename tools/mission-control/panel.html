@@ -564,6 +564,10 @@
     <h1>⚡ Mission Control <span class="pulse-dot" aria-hidden="true"></span></h1>
     <div class="header-actions">
       <button class="icon-btn" id="alerts-btn" onclick="enableAlerts()" title="Enable alerts" aria-label="Enable completion alerts">🔔</button>
+      <!-- Only rendered when tmux is missing. A permanent "tmux ✓" badge would be noise
+           on every healthy host, and the whole point of #201 is that the *degraded*
+           case was the invisible one. -->
+      <span class="status-badge pending" id="agy-persistence-badge" hidden></span>
       <span class="status-badge running" id="server-health-badge">Online</span>
     </div>
   </header>
@@ -1183,6 +1187,18 @@
         const data = await api('/health');
         const badge = document.getElementById('server-health-badge');
         badge.textContent = data.status === 'ok' ? 'Online' : 'Offline';
+
+        // tmux missing: agy sessions still run, but detached — nothing can attach to them
+        // or reattach after a restart. Surfaced only in that case; see the markup above.
+        const persistence = document.getElementById('agy-persistence-badge');
+        const degraded = data.agy_persistence === 'direct';
+        persistence.hidden = !degraded;
+        if (degraded) {
+          persistence.textContent = 'agy: no tmux';
+          persistence.title = 'tmux is not installed, so agy persistent sessions run detached '
+            + 'and cannot be attached to or reattached after a restart. Install tmux and restart '
+            + 'the server.';
+        }
       } catch (e) {
         document.getElementById('server-health-badge').textContent = 'Error';
       }
