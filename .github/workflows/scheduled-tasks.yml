@@ -65,8 +65,17 @@ jobs:
     timeout-minutes: 180
     # tools/human-needed.js opens/closes the `human-needed` tracking issue from the preflight and
     # cleanup steps below.
+    # contents+pull-requests are NOT optional (#243): stage 2 executes AI-actionable items as draft
+    # PRs, so it must push a branch and open a PR. With `issues: write` alone the token reported
+    # push:false and two committed, tested branches were stranded on the runner with no PR — the run
+    # "succeeded" while its actual output was lost. A stranded branch is worse than a failed run.
+    # Note the deliberate consequence: a PR opened by GITHUB_TOKEN does not fire `pull_request`
+    # workflows, so these open as DRAFTS by design — the human flip to ready_for_review is what
+    # triggers the Sam audit gate. That keeps the audit gate honest rather than self-approved.
     permissions:
       issues: write
+      contents: write
+      pull-requests: write
     # Job-level so every step sees it (step-level env does not carry across steps).
     # LIFE_REPO: where MC's GET /briefing reads from; keep in step with tools/mission-control/README.md.
     # ALERT_KEY: one key for "the daily triage is not working", shared with

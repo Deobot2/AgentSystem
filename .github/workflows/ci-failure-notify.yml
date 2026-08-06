@@ -2,7 +2,9 @@ name: CI Failure Notifier
 
 on:
   workflow_run:
-    workflows: [test.yml]
+    # `workflows:` matches a workflow's `name:`, NOT its filename. This said `test.yml`, which
+    # matches nothing, so this notifier never fired once since it was added. test.yml is `Tests`.
+    workflows: [Tests]
     types: [completed]
 
 permissions:

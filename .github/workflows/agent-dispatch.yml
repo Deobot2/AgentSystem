@@ -12,6 +12,16 @@ on:
   pull_request:
     types: [ready_for_review]
 
+# Every job here writes back to the issue/PR: comments, labels, and `gh pr merge`. With no
+# permissions block the default GITHUB_TOKEN is read-only, so `ambient-sam-review` died with
+# 403 "Resource not accessible by integration" on its own result comment while the scan itself
+# had already succeeded. Declared workflow-level, not per job, because `dispatch`, `auto-merge`
+# and `ambient-sam-review` all need the same three and all three would fail the same way.
+permissions:
+  contents: write        # auto-merge: gh pr merge --squash --delete-branch
+  issues: write          # createComment / addLabels / removeLabel
+  pull-requests: write   # gh pr comment, gh pr merge
+
 # Only one agent dispatch per issue/PR at a time
 concurrency:
   group: agent-dispatch-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -358,16 +368,29 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git diff "$BASE_SHA" "$HEAD_SHA" --stat > "$RUNNER_TEMP/diff-stat.txt" 2>&1 || true
-          git diff "$BASE_SHA" "$HEAD_SHA" -- '*.js' '*.ts' '*.py' '*.yml' '*.yaml' '*.json' > "$RUNNER_TEMP/pr-diff-full.txt" 2>&1 || true
+          # No `2>&1` on the diff redirects: it put git's own error text INSIDE the file that
+          # becomes the scan prompt, so a failed diff read as reviewable content.
+          git diff "$BASE_SHA" "$HEAD_SHA" --stat > "$RUNNER_TEMP/diff-stat.txt" || true
+          git diff "$BASE_SHA" "$HEAD_SHA" -- '*.js' '*.ts' '*.py' '*.yml' '*.yaml' '*.json' > "$RUNNER_TEMP/pr-diff-full.txt" || true
           # Truncate to ~8000 chars — Haiku context is sufficient and keeps tokens down.
           head -c 8000 "$RUNNER_TEMP/pr-diff-full.txt" > "$RUNNER_TEMP/pr-diff.txt"
           if [ "$(wc -c < "$RUNNER_TEMP/pr-diff-full.txt")" -gt 8000 ]; then
             printf '\n...(truncated)\n' >> "$RUNNER_TEMP/pr-diff.txt"
           fi
+          # A docs-only PR matches none of the globs above, so the filtered diff is empty. Handing
+          # Sam an empty diff made it answer with a QUESTION ("paste the diff?"), which the post
+          # step then classified as "issues detected" and commented on the PR — a false positive on
+          # every .md-only PR. Nothing security-relevant changed, so skip the scan entirely.
+          if [ ! -s "$RUNNER_TEMP/pr-diff.txt" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No code-file changes in this PR — skipping ambient scan."
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Sam ambient scan (Haiku)
         id: sam_scan
+        if: steps.diff.outputs.empty != 'true'
         shell: bash
         # Untrusted PR url/title via env, not interpolated.
         env:
@@ -394,6 +417,7 @@ jobs:
         continue-on-error: true
 
       - name: Post scan result as PR comment
+        if: steps.diff.outputs.empty != 'true'
         uses: actions/github-script@v7
         with:
           script: |
