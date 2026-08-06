@@ -21,8 +21,11 @@ Run after any `hooks/` change. Manifest is `HOOK_REGISTRY` in `tools/deploy-hook
 hooks there. Registration was once PowerShell-only, so on Linux the whole pipeline was
 installed-but-inert; `--check` in CI is what stops that recurring.
 
-Not registered on purpose: `tool-output-compress.js`. PostToolUse can only append context, never
-replace a tool result — it cost ~800 tok per large Bash output while claiming to save.
+`tool-output-compress.js` was deleted in `4adeab6` (2026-07-26). Its PostToolUse implementation
+could only **append**, so compressing a large output meant keeping the original and adding a
+summary on top — measured at +3218 chars on a 10,000-char output. PostToolUse can now **replace** a
+result via `hookSpecificOutput.updatedToolOutput` (confirmed against the hook docs, Aug 2026), so a
+redo would actually save. Nobody has asked for one — don't build it on spec.
 
 ## Memory
 Root `~/agent-memory/nexus/` — shared by Claude and Antigravity.
