@@ -9,7 +9,7 @@
  * Spawns `agy` in tmux sessions for background execution
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +35,22 @@ export function agyArgs({ prompt, repoPath, model, agent, continueId }) {
   if (ALLOW_SKIP_PERMISSIONS) args.push('--dangerously-skip-permissions');
   args.push('--add-dir', repoPath);
   return args;
+}
+
+// tmux-or-direct is decided per spawn, by whether the tmux call below errors or exits non-zero.
+// A host without tmux therefore keeps working, but every "persistent" session is really a
+// detached child that nothing can attach to, reattach after a restart, or pipe a log from. That
+// is a real capability loss and it happened silently — /health reports this so it does not.
+//
+// Probed once and cached: install tmux and restart the server to pick it up. A per-request
+// subprocess to answer a health check would cost more than the accuracy is worth.
+let tmuxAvailable = null;
+export function persistenceMode() {
+  if (tmuxAvailable === null) {
+    const probe = spawnSync('tmux', ['-V'], { stdio: 'ignore' });
+    tmuxAvailable = !probe.error && probe.status === 0;
+  }
+  return tmuxAvailable ? 'tmux' : 'direct';
 }
 
 export async function spawnAgyPersistent({ prompt, repoPath, model, agent, continueId }) {

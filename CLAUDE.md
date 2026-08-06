@@ -21,6 +21,10 @@ Run after any `hooks/` change. Manifest is `HOOK_REGISTRY` in `tools/deploy-hook
 hooks there. Registration was once PowerShell-only, so on Linux the whole pipeline was
 installed-but-inert; `--check` in CI is what stops that recurring.
 
+Hooks are Claude Code only — there is no Antigravity equivalent, so every hook-borne feature is
+inert in an `agy` session (#240). Adding a hook therefore adds an Antigravity gap: record it in
+`docs/harness-support.md`, which `tests/harness-support.test.js` enforces.
+
 `tool-output-compress.js` was deleted in `4adeab6` (2026-07-26). Its PostToolUse implementation
 could only **append**, so compressing a large output meant keeping the original and adding a
 summary on top — measured at +3218 chars on a 10,000-char output. PostToolUse can now **replace** a

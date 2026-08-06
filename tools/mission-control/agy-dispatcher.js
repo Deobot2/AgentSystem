@@ -3,10 +3,7 @@
  * Antigravity (agy) Harness Dispatcher
  * Spawns one-shot and persistent agy sessions for Mission Control
  *
- * PERSISTENCE WRAPPER:
- * Leo is building tools/mission-control/agy-persistence.js (issue #84)
- * that provides spawnAgyPersistent({ prompt, repoPath, model?, continueId? })
- * This module stubs against that interface until it's available.
+ * Persistent sessions go through agy-persistence.js (landed in #84/#98).
  */
 
 import { spawn } from 'node:child_process';
@@ -73,8 +70,8 @@ export async function spawnAgyOneShotDirect(prompt, repoPath, model = null, agen
 }
 
 /**
- * Spawn persistent agy session (wraps Leo's agy-persistence.js)
- * This function stubs against Leo's module until #84 is merged
+ * Spawn persistent agy session (wraps agy-persistence.js)
+ * Falls back to a one-shot run if the persistent spawn fails.
  *
  * @param {string} prompt - Task description
  * @param {string} repoPath - Absolute path to repo (pre-validated)
