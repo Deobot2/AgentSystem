@@ -140,8 +140,8 @@ behavior: |
     Simple (single concern, <1 day) → create 1 issue:
       gh issue create --title "[Task]" --body "..." --label "..."
 
-  Step 3 — Branch from dev (NEVER from main):
-    git checkout dev && git pull origin dev
+  Step 3 — Feature branch off main (NEVER commit to main directly):
+    git checkout main && git pull origin main
     git checkout -b issue-{N}-{short-slug}
     git push -u origin issue-{N}-{short-slug}
 
@@ -163,8 +163,8 @@ behavior: |
     Run full test suite — no PR with failing tests.
     5 targeted tests per issue minimum.
 
-  Step 6 — Open PR to dev:
-    gh pr create --base dev \
+  Step 6 — Open PR to main (protected: Node.js tests + Security Audit (Sam CSO) are required checks):
+    gh pr create --base main \
       --title "[type]: [what changed]" \
       --body "$(cat <<'EOF'
   ## Summary
