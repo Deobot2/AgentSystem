@@ -199,13 +199,24 @@ function parseArgs(argv) {
   return { cmd, id: positional[0], flags };
 }
 
-function show(entries, { json }) {
+/**
+ * The label shown for a pending entry. Must agree with the same two gates `due` filters on
+ * (isDue AND channelMode === 'send') — otherwise `list` can call something DUE that the send
+ * gate will never actually release, which reads as "about to go out" or "sending is broken".
+ */
+export function stateLabel(entry, now = new Date(), { configPath } = {}) {
+  if (!isDue(entry, now)) return `holds until ${entry.sendsAfter}`;
+  if (channelMode(entry.network, { configPath }) === 'send') return 'DUE';
+  return `held — ${entry.network} is draft-only`;
+}
+
+function show(entries, { json, configPath } = {}) {
   if (json) { console.log(JSON.stringify(entries, null, 2)); return; }
   if (!entries.length) { console.log('Outbox empty.'); return; }
   const now = new Date();
   for (const e of entries) {
     if (e._malformed) { console.log(`  [${e.id}] MALFORMED — will never send; delete or fix it`); continue; }
-    const state = isDue(e, now) ? 'DUE' : `holds until ${e.sendsAfter}`;
+    const state = stateLabel(e, now, { configPath });
     console.log(`  [${e.id}] ${e.network} -> ${e.to || e.chat}  (${state})`);
     console.log(`        ${e.body.split('\n')[0].slice(0, 100)}${e.body.length > 100 ? '…' : ''}`);
   }
