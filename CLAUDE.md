@@ -133,6 +133,22 @@ title, which humans edit). Re-raising an open alert comments instead of duplicat
 per 20h, so a daily job neither opens 365 issues nor goes quiet. GitHub is the channel because it
 already emails and survives a host reboot; there is no push endpoint on the webhook server.
 
+## Actions watchdog (runs off Actions on purpose)
+
+`tools/actions-watchdog.js` checks hourly that Actions is enabled repo-wide **and** that the newest
+workflow run is younger than 24h, and raises/resolves the `actions-down` human-needed alert.
+
+**Do not move this into a workflow.** Every other watchdog here is an Actions workflow, so a
+repo-level disable silences the detector along with everything it detects — that is how Actions
+sat off for five days unnoticed (#197). It lives on the host:
+```bash
+bash tools/install-actions-watchdog.sh      # systemd --user timer, hourly, enables linger
+node tools/actions-watchdog.js --dry-run    # verdict only, changes nothing
+```
+Exit 3 means "outage detected, alert raised" — the unit declares `SuccessExitStatus=0 3` so
+systemd does not read a working watchdog as a failed one. Alerting still goes through GitHub
+Issues, which is unaffected by `actions/permissions.enabled = false`.
+
 ## Path-Scoped Rules
 
 **DB / schema** (`*.sql`, `prisma/**`, `*.prisma`) — Pym domain. Migrate in dev first. Never
