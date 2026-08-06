@@ -1,11 +1,14 @@
-// Two workflow defects that cost real runs, both of the same shape: the workflow was syntactically
-// valid, went green, and did nothing.
+// Workflow defects of the shape that costs real runs: the workflow is syntactically valid, goes
+// green, and does nothing.
 //
 //   1. ci-failure-notify.yml said `workflow_run.workflows: [test.yml]`. That key matches a
 //      workflow's `name:`, not its filename, so it matched nothing and the notifier never fired
 //      once. Nothing failed — there was simply never a run.
-//   2. agent-dispatch.yml declared no `permissions:`, so its default GITHUB_TOKEN was read-only and
-//      `ambient-sam-review` 403'd on the comment it exists to post, after paying for the scan.
+//   2. scheduled-tasks.yml's daily-triage held `issues: write` alone, so the job committed and
+//      tested two branches, could push neither, and reported success (#243).
+//
+// Per-job GITHUB_TOKEN scopes are covered by tests/workflow_permissions.test.js, which checks each
+// job against the specific writes it makes rather than checking the file has a block at all.
 //
 // Regex rather than a YAML parser on purpose: tools/** and tests/** take no npm deps (CLAUDE.md),
 // and both defects live in single lines that a regex reads exactly as well.
@@ -19,14 +22,6 @@ import { fileURLToPath } from 'node:url';
 const WF_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows');
 const files = fs.readdirSync(WF_DIR).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
 const read = (f) => fs.readFileSync(path.join(WF_DIR, f), 'utf8');
-
-// Strip `#` comments so prose that merely mentions a pattern is not mistaken for a call. Only
-// whole-line comments: a `#` inside a run: script can be meaningful shell.
-const stripComments = (src) =>
-  src
-    .split(/\r?\n/)
-    .filter((line) => !/^\s*#/.test(line))
-    .join('\n');
 
 test('workflow_run.workflows entries match a real workflow name, not a filename', () => {
   const names = new Set(
@@ -55,36 +50,6 @@ test('workflow_run.workflows entries match a real workflow name, not a filename'
         );
       }
     }
-  }
-});
-
-test('a workflow that writes to an issue or PR declares permissions', () => {
-  // Each pattern needs a GITHUB_TOKEN scope beyond the read-only default.
-  const WRITES = [
-    /issues\.createComment/,
-    /issues\.addLabels/,
-    /issues\.removeLabel/,
-    /issues\.update\b/,
-    /pulls\.create\b/,
-    /\bgh pr comment\b/,
-    /\bgh pr merge\b/,
-    /\bgh pr edit\b/,
-    /\bgh pr create\b/,
-    /\bgh issue comment\b/,
-    /\bgh issue create\b/,
-  ];
-
-  for (const f of files) {
-    const src = stripComments(read(f));
-    const hit = WRITES.find((re) => re.test(src));
-    if (!hit) continue;
-    assert.match(
-      src,
-      /^\s*permissions:\s*$/m,
-      `${f} writes to an issue or PR (matched ${hit}) but declares no permissions:. ` +
-        `The default GITHUB_TOKEN is read-only, so that call fails with 403 ` +
-        `"Resource not accessible by integration" at runtime — after the job has done its work.`
-    );
   }
 });
 

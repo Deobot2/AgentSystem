@@ -12,15 +12,15 @@ on:
   pull_request:
     types: [ready_for_review]
 
-# Every job here writes back to the issue/PR: comments, labels, and `gh pr merge`. With no
-# permissions block the default GITHUB_TOKEN is read-only, so `ambient-sam-review` died with
-# 403 "Resource not accessible by integration" on its own result comment while the scan itself
-# had already succeeded. Declared workflow-level, not per job, because `dispatch`, `auto-merge`
-# and `ambient-sam-review` all need the same three and all three would fail the same way.
-permissions:
-  contents: write        # auto-merge: gh pr merge --squash --delete-branch
-  issues: write          # createComment / addLabels / removeLabel
-  pull-requests: write   # gh pr comment, gh pr merge
+# Every job here writes back to the issue/PR: comments, labels, and `gh pr merge`. This workflow
+# shipped with no permissions block at all, and the repo's default_workflow_permissions is `read`
+# (`gh api repos/:owner/:repo/actions/permissions/workflow`), so `ambient-sam-review` died with
+# 403 "Resource not accessible by integration" posting its own result comment after the scan had
+# already succeeded — a red X that reads like a code failure but is not.
+#
+# Scoped per job rather than workflow-wide: only `auto-merge` needs `contents: write`, and a
+# workflow-level grant would hand that to the two jobs that run untrusted PR content through a
+# model. `tests/workflow_permissions.test.js` fails the build if a writing job loses its scopes.
 
 # Only one agent dispatch per issue/PR at a time
 concurrency:
@@ -33,6 +33,10 @@ jobs:
     # tools/mission-control/install-runner.sh). BOTH labels required so only the
     # Linux runner picks this up.
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+      issues: write          # createComment, addLabels, removeLabel
+      pull-requests: write   # createComment on a PR conversation
     # Trigger on:
     #   agent:* label on issue
     #   /agent <name> comment (issue or PR) from repo owner
@@ -338,6 +342,9 @@ jobs:
 
   ambient-sam-review:
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+      pull-requests: write   # posts the scan result as a PR comment
     # Quick Haiku-tier security scan on every PR marked ready for review.
     # Full Sonnet audit by Sam is still required before any merge to main.
     # Trigger on ready_for_review only (not opened) to avoid draft noise.
@@ -438,6 +445,9 @@ jobs:
 
   auto-merge:
     runs-on: [self-hosted, Linux]
+    permissions:
+      contents: write        # gh pr merge --squash --delete-branch
+      pull-requests: write   # gh pr comment, gh pr merge
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
