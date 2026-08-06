@@ -336,9 +336,9 @@ gemini --agent threepio --pr-description
 **Steps:**
 1. Live memory is the graph brain under `~/agent-memory/nexus/` — query via `node tools/graph/graph-query.js`
 2. Run sync: `node tools/sync-agents.js`
-3. `.agents/memory/*.md` is deprecated (#117). The archived copies under `docs/archive/agents-memory/`
-   were removed from HEAD in #213 — historical scratch notes, read by no tool, in a public repo.
-   Still present in git history; purge tracked in #214.
+3. `.agents/memory/*.md` is deprecated (#117) and no longer present — historical scratch notes,
+   read by no tool. This repo is public and deleting a file from HEAD does not remove it from
+   history, so keep client and infrastructure specifics out of anything committed here.
 
 ---
 
