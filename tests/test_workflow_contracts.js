@@ -53,6 +53,32 @@ test('workflow_run.workflows entries match a real workflow name, not a filename'
   }
 });
 
+test('runner health check ignores abandoned queued runs, so its alert can clear', () => {
+  // A third defect of the same shape: the check ran, went green, and could never stop alerting.
+  // Indirect detection counted any run queued >10min as proof the runner is offline. GitHub can
+  // leave a run permanently `queued` with nothing to cancel — the 2026-08-06 outage stranded three
+  // on a branch merged and deleted the same day — so the check reported `state=down` against an
+  // online idle runner, the tracking issue could never auto-close, and every daily run commented
+  // on it again. The window needs an upper bound: only a recently queued run says anything about
+  // the runner now.
+  const src = read('runner-health-check.yml');
+  const select = src.match(/select\(\s*\.created_at\s*<\s*\$cutoff[^)]*\)/);
+  assert.ok(select, 'runner-health-check.yml no longer filters queued runs by created_at — parse is stale');
+  assert.match(
+    select[0],
+    /\.created_at\s*>\s*\$\w+/,
+    'runner-health-check.yml counts queued runs with no upper age bound. A run GitHub left queued ' +
+      'days ago on a deleted branch then pins state=down forever and the runner:down issue can ' +
+      'never auto-close.'
+  );
+  assert.match(
+    src,
+    /--arg\s+\w+\s+"\$\(date -u -d '-\d+ hours?' \+%Y-%m-%dT%H:%M:%SZ\)"/,
+    'the upper bound must come from a jq --arg holding a real timestamp, or the select above ' +
+      'compares against an undefined variable and silently matches nothing.'
+  );
+});
+
 test('daily-triage can push a branch and open the PR it is specified to produce', () => {
   // Stage 2's whole output is draft PRs. `issues: write` alone let the job finish "successfully"
   // with its committed branches stranded and unpushed (#243).
