@@ -86,18 +86,30 @@ jobs:
             # means nobody triggered those workflows today. Reporting that as healthy is
             # what let a permanently offline runner go unnoticed, so "no evidence" is
             # now `unknown`, which neither opens nor closes the tracking issue.
+            #
+            # The window has an upper bound as well as a lower one. GitHub can leave a run
+            # permanently `queued` with nothing to cancel — the 2026-08-06 outage stranded
+            # three of them on a branch that was merged and deleted the same day, and
+            # `gh run cancel` answers "Cannot cancel a workflow run that is completed"
+            # while the API still reports `queued`. Counting those pinned this check at
+            # `state=down` with an online idle runner, so the tracking issue could never
+            # auto-close and every daily run commented on it again. Only a run queued
+            # inside the recent window is evidence about the runner *now*; anything older
+            # is an abandoned run, and abandoned runs must not outvote a live runner.
             method="indirect"
             stuck=0
             for wf in agent-dispatch.yml sam-audit.yml scheduled-tasks.yml; do
               runs_json=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?status=queued&per_page=10" 2>/dev/null)
               [ -z "$runs_json" ] && continue
-              count=$(echo "$runs_json" | jq --arg cutoff "$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)" \
-                '[.workflow_runs[]? | select(.created_at < $cutoff)] | length' 2>/dev/null || echo 0)
+              count=$(echo "$runs_json" | jq \
+                --arg cutoff "$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg stale "$(date -u -d '-6 hours' +%Y-%m-%dT%H:%M:%SZ)" \
+                '[.workflow_runs[]? | select(.created_at < $cutoff and .created_at > $stale)] | length' 2>/dev/null || echo 0)
               stuck=$((stuck + count))
             done
             if [ "$stuck" -gt 0 ]; then
               state=down
-              detail="$stuck job(s) queued >10min with no runner"
+              detail="$stuck job(s) queued >10min (and <6h) with no runner"
             else
               state=unknown
               detail="no RUNNER_ADMIN_TOKEN secret and no stuck jobs — health cannot be confirmed"
