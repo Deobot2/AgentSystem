@@ -636,10 +636,21 @@ function listSkillsAndCommands() {
   const marketplaces = `${HOME}/.claude/plugins/marketplaces`;
   const plugins = safeReaddir(marketplaces).filter(e => e.isDirectory()).map(e => e.name);
 
+  // Two marketplace layouts are both live on this host: a single-plugin marketplace keeps
+  // `skills/` and `commands/` at its root, while a multi-plugin one nests them under
+  // `plugins/<name>/`. Reading only the first found 7 commands where the host has ~40.
+  const pluginDirs = [];
+  for (const p of plugins) {
+    pluginDirs.push({ dir: `${marketplaces}/${p}`, source: p });
+    for (const sub of safeReaddir(`${marketplaces}/${p}/plugins`)) {
+      if (sub.isDirectory()) pluginDirs.push({ dir: `${marketplaces}/${p}/plugins/${sub.name}`, source: sub.name });
+    }
+  }
+
   const skills = [];
   const skillRoots = [
     { root: `${HOME}/.claude/skills`, source: 'user' },
-    ...plugins.map(p => ({ root: `${marketplaces}/${p}/skills`, source: p })),
+    ...pluginDirs.map(({ dir, source }) => ({ root: `${dir}/skills`, source })),
   ];
   for (const { root, source } of skillRoots) {
     for (const entry of safeReaddir(root)) {
@@ -653,7 +664,7 @@ function listSkillsAndCommands() {
   const commands = [];
   const cmdRoots = [
     { root: `${HOME}/.claude/commands`, source: 'user' },
-    ...plugins.map(p => ({ root: `${marketplaces}/${p}/commands`, source: p })),
+    ...pluginDirs.map(({ dir, source }) => ({ root: `${dir}/commands`, source })),
   ];
   for (const { root, source } of cmdRoots) {
     for (const entry of safeReaddir(root)) {

@@ -68,6 +68,17 @@ test.before(async () => {
     JSON.stringify({ repos: [{ slug: 'demo', path: home, bootstrap_complete: true }] }));
   writeFileSync(path.join(home, 'agent-memory', 'nexus', 'tasks', 'demo', '42', 'scratchpad.md'), '# scratch\nhello\n');
 
+  // Both marketplace layouts, because only reading the flat one found 7 commands on a host
+  // that has ~40. `~/.claude/skills` is deliberately left absent so the missing-dir path
+  // stays covered too.
+  const mp = path.join(home, '.claude', 'plugins', 'marketplaces');
+  mkdirSync(path.join(mp, 'flat', 'skills', 'flat-skill'), { recursive: true });
+  writeFileSync(path.join(mp, 'flat', 'skills', 'flat-skill', 'SKILL.md'), '---\ndescription: a flat one\n---\n');
+  mkdirSync(path.join(mp, 'bundle', 'plugins', 'inner', 'skills', 'nested-skill'), { recursive: true });
+  writeFileSync(path.join(mp, 'bundle', 'plugins', 'inner', 'skills', 'nested-skill', 'SKILL.md'), '---\ndescription: a nested one\n---\n');
+  mkdirSync(path.join(mp, 'bundle', 'plugins', 'inner', 'commands'), { recursive: true });
+  writeFileSync(path.join(mp, 'bundle', 'plugins', 'inner', 'commands', 'nested-cmd.md'), '---\ndescription: nested command\n---\n');
+
   // /branches shells out to git, so the seeded repo has to actually be one.
   // -c user.* because a CI runner has no global git identity to commit with.
   execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q', home]);
@@ -240,7 +251,7 @@ test('POST /swarm reports per-task rejections and the per-harness cap', async ()
 
 // ── skills / commands discovery ──────────────────────────────────────────────
 
-// The throwaway HOME has no skills dir at all, so this also pins that a missing
+// The throwaway HOME has no `~/.claude/skills` at all, so this also pins that a missing
 // directory is an empty list, not a 500.
 test('GET /skills returns arrays and the agent roster', async () => {
   const r = await api('/skills');
@@ -249,6 +260,18 @@ test('GET /skills returns arrays and the agent roster', async () => {
   assert.ok(Array.isArray(body.skills));
   assert.ok(Array.isArray(body.commands));
   assert.ok(body.agents.includes('friday'));
+});
+
+// Both layouts, or the picker silently shows a fraction of what is installed: the flat
+// `<marketplace>/skills/` and the nested `<marketplace>/plugins/<name>/skills/`.
+test('GET /skills finds flat and nested plugin layouts', async () => {
+  const body = await (await api('/skills')).json();
+  const skill = n => body.skills.find(s => s.name === n);
+  assert.ok(skill('flat-skill'), 'flat marketplace skill missing');
+  assert.ok(skill('nested-skill'), 'nested plugin skill missing');
+  assert.equal(skill('nested-skill').description, 'a nested one', 'frontmatter description not read');
+  assert.equal(skill('nested-skill').source, 'inner', 'nested skill should be attributed to its plugin');
+  assert.ok(body.commands.some(c => c.name === 'nested-cmd'), 'nested plugin command missing');
 });
 
 // ── allowlisted ops ──────────────────────────────────────────────────────────
