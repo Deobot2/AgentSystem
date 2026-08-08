@@ -306,8 +306,13 @@ function getCostSummary() {
 // cap). Prevents duplicate spawns from rapid-fire repeated events (e.g. GitHub
 // retries/flapping webhooks) and caps total concurrent background sessions.
 const SPAWN_DEDUPE_WINDOW_MS = 30 * 1000;
-const MAX_CONCURRENT_BG_SESSIONS = 5;
-const recentSpawnKeys = new Map(); // `${agent}|${cwd}` -> last spawn timestamp
+// Both caps are env-tunable: swarm dispatch (POST /swarm) routinely wants more than one
+// session in flight, and the old hard-coded values made that impossible to express.
+const MAX_CONCURRENT_BG_SESSIONS = Math.max(1, Number(process.env.MC_MAX_BG_SESSIONS) || 8);
+// Per-harness cap, formerly a hard 1 (#95). Raised and made configurable so the panel can
+// fan out; set MC_MAX_PER_HARNESS=1 to restore the original single-session behaviour.
+const MAX_PER_HARNESS = Math.max(1, Number(process.env.MC_MAX_PER_HARNESS) || 4);
+const recentSpawnKeys = new Map(); // `${agent}|${cwd}|${model}|${promptHash}` -> last spawn timestamp
 
 function pruneRecentSpawnKeys(now) {
   for (const [key, ts] of recentSpawnKeys) {
@@ -323,9 +328,11 @@ function spawnAgent(agent, prompt, cwd = HOME, model = null) {
     const now = Date.now();
     pruneRecentSpawnKeys(now);
 
-    // 1. Debounce/dedup: skip identical agent+cwd+model spawns within the window. Model is part
-    // of the key so re-running the same task at a different tier is not swallowed as a duplicate.
-    const dedupeKey = `${agent}|${cwd}|${model || 'default'}`;
+    // 1. Debounce/dedup: skip identical agent+cwd+model+prompt spawns within the window. Model
+    // and prompt are both part of the key — the point of the guard is a webhook firing the SAME
+    // task twice, and without the prompt a swarm of N tasks on one agent+repo would have N-1
+    // of its members silently dropped as duplicates.
+    const dedupeKey = `${agent}|${cwd}|${model || 'default'}|${createHmac('sha256', 'spawn-dedupe').update(String(prompt)).digest('hex').slice(0, 16)}`;
     const lastSpawn = recentSpawnKeys.get(dedupeKey);
     if (lastSpawn && (now - lastSpawn) < SPAWN_DEDUPE_WINDOW_MS) {
       console.log(`[spawn-guard] Skipped duplicate spawn for agent=${agent} cwd=${cwd} (last spawned ${now - lastSpawn}ms ago, window=${SPAWN_DEDUPE_WINDOW_MS}ms)`);
@@ -430,6 +437,237 @@ function spawnAgent(agent, prompt, cwd = HOME, model = null) {
  */
 async function dispatchClaude(agent, prompt, repoPath, model = null) {
   return spawnAgent(agent, prompt, repoPath, model);
+}
+
+/**
+ * Validate + dispatch one Mission Control session. Shared by POST /run (one task) and
+ * POST /swarm (N tasks), so both paths get identical validation, the same per-harness cap
+ * and the same registry bookkeeping — a swarm is N of these, not a second dispatch path.
+ * Returns {code, body} rather than writing the response, since /swarm aggregates N of them.
+ */
+async function dispatchOne({ harness, prompt, repo, agent = null, model = null, req }) {
+  if (!harness) return { code: 400, body: { error: 'harness required (claude or agy)' } };
+  if (!prompt) return { code: 400, body: { error: 'prompt required' } };
+  if (!repo) return { code: 400, body: { error: 'repo required (slug from allowlist)' } };
+
+  if (!['claude', 'agy'].includes(harness)) {
+    return { code: 400, body: { error: `Unknown harness "${harness}". Valid: claude, agy` } };
+  }
+
+  // model reaches a spawn arg list here and (on a concurrency-cap requeue) a win32 shell
+  // string in event-dispatcher.js, so it is shape-checked at the boundary, not downstream.
+  if (model !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(String(model))) {
+    return { code: 400, body: { error: `Invalid model id: ${model}` } };
+  }
+
+  const knownRepos = loadKnownRepos();
+  let repoPath;
+  try {
+    repoPath = validateRepo(repo, knownRepos).path;
+  } catch (e) {
+    return { code: 403, body: { error: e.message } };
+  }
+
+  // CONCURRENCY CAP: per-harness, MC_MAX_PER_HARNESS (default 4, was a hard 1 — #95).
+  reapDeadAgySessions();
+  const running = registry.getRunning().filter(s => s.harness === harness);
+  if (running.length >= MAX_PER_HARNESS) {
+    return { code: 409, body: {
+      error: `${harness} harness at capacity`,
+      running: running.length,
+      cap: MAX_PER_HARNESS,
+      message: `Max ${MAX_PER_HARNESS} concurrent ${harness} sessions (MC_MAX_PER_HARNESS). Wait or stop one.`,
+    } };
+  }
+
+  // The roster is synced to BOTH harnesses by tools/sync-agents.js (agy gets it as
+  // the `agentsystem` plugin), so the same names are valid for agy via `agy --agent`.
+  if (agent && !VALID_AGENTS.includes(agent.toLowerCase())) {
+    return { code: 400, body: { error: `Unknown agent: ${agent}` } };
+  }
+  if (harness === 'claude' && !agent) {
+    return { code: 400, body: { error: 'agent required for claude harness' } };
+  }
+
+  const sessionRecord = registry.createSession({
+    harness,
+    repo,
+    prompt,
+    agent: agent ? agent.toLowerCase() : null,
+    // Recorded for both harnesses — the claude harness honors it too now (--model), so the
+    // panel must be able to show which tier a session actually ran at.
+    model,
+  });
+
+  try {
+    const dispatchResult = harness === 'claude'
+      // agent presence + roster membership are already validated above, before the
+      // registry entry exists — no need to create a session just to fail it.
+      ? await dispatchClaude(agent.toLowerCase(), prompt, repoPath, model)
+      // agy: agent is optional; omitted means agy's default agent.
+      : await spawnAgyPersistent(prompt, repoPath, model, agent ? agent.toLowerCase() : null);
+
+    // A spawn-guard skip is not a running session — record the exit and say why, or the
+    // registry fills with phantom 'running' rows the panel can never clear.
+    if (dispatchResult.skipped) {
+      registry.exitSession(sessionRecord.id, 1);
+      return { code: 429, body: {
+        id: sessionRecord.id, harness, repo, status: 'skipped', reason: dispatchResult.reason,
+        active: dispatchResult.active, cap: dispatchResult.cap,
+        queuedEventId: dispatchResult.queuedEventId || null,
+      } };
+    }
+
+    if (dispatchResult.sessionId) {
+      registry.updateSession(sessionRecord.id, {
+        status: 'running',
+        logPath: dispatchResult.logPath || dispatchResult.logFile || null,
+        harnessSessionId: dispatchResult.sessionId,
+        tmuxSession: dispatchResult.tmuxSession || null,
+        pid: dispatchResult.pid || null,
+      });
+    } else {
+      registry.exitSession(sessionRecord.id, dispatchResult.exitCode || 1);
+    }
+
+    console.log(`[mc-${harness}] repo=${repo} id=${sessionRecord.id} prompt="${prompt.slice(0, 60)}"`);
+    return { code: 202, body: {
+      id: sessionRecord.id,
+      harness,
+      repo,
+      agent: agent ? agent.toLowerCase() : null,
+      status: dispatchResult.status || 'running',
+      spawnedAt: sessionRecord.spawnedAt,
+      logUrl: `${publicBaseUrl({
+        publicUrl: PUBLIC_URL,
+        hostHeader: req?.headers?.host,
+        forwardedProto: req?.headers?.['x-forwarded-proto'],
+        port: PORT,
+      })}/log/${sessionRecord.id}`,
+    } };
+  } catch (e) {
+    registry.exitSession(sessionRecord.id, 1);
+    console.error(`[mc-${harness}] dispatch error:`, e.message);
+    return { code: 500, body: { error: `Dispatch failed: ${e.message}` } };
+  }
+}
+
+// One /swarm call cannot ask for more than this many tasks. The per-harness cap already
+// bounds what actually runs; this bounds the request itself so a typo'd body cannot make the
+// server walk a 10,000-element array of spawn attempts.
+const MAX_SWARM_TASKS = 20;
+
+const TOOLS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const OPS_TIMEOUT_MS = 60_000;
+
+// ── allowlisted ops (GET /ops, POST /ops/run) ────────────────────────────────
+// This endpoint is reachable over the network with a bearer key, so it is a strict registry,
+// never a shell. Each entry names one script under tools/ plus its fixed flags. A caller may
+// supply at most ONE extra argument, only where `argPattern` says so, and only if it matches —
+// so there is no path by which a caller composes a command of their own.
+const OP_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;   // routine ids, alert keys, agent names
+const OPS = {
+  'routines.list':      { group: 'Routines', label: 'List routines', script: 'routines.js', args: ['list'] },
+  'routines.verify':    { group: 'Routines', label: 'Verify cron wiring', script: 'routines.js', args: ['verify'] },
+  'routines.compile':   { group: 'Routines', label: 'Compile (+verify)', script: 'routines.js', args: ['compile', '--verify'], mutates: true },
+  'routines.bypass':    { group: 'Routines', label: 'Bypass routine', script: 'routines.js', args: ['bypass'], argPattern: OP_ID, argHint: 'routine id', mutates: true },
+  'routines.unbypass':  { group: 'Routines', label: 'Un-bypass routine', script: 'routines.js', args: ['unbypass'], argPattern: OP_ID, argHint: 'routine id', mutates: true },
+  'lifeos.doctor':      { group: 'Life OS', label: 'Doctor (full)', script: 'life-os-doctor.js', args: [], timeoutMs: 180_000 },
+  'lifeos.doctor.hard': { group: 'Life OS', label: 'Doctor (hard gaps only)', script: 'life-os-doctor.js', args: ['--hard-only'] },
+  'outbox.list':        { group: 'Life OS', label: 'Outbox — all', script: 'life-os-outbox.js', args: ['list'] },
+  'outbox.due':         { group: 'Life OS', label: 'Outbox — due now', script: 'life-os-outbox.js', args: ['due'] },
+  'outbox.cancel':      { group: 'Life OS', label: 'Outbox — cancel', script: 'life-os-outbox.js', args: ['cancel'], argPattern: OP_ID, argHint: 'outbox id', mutates: true },
+  'alerts.list':        { group: 'Alerts', label: 'Open human-needed alerts', script: 'human-needed.js', args: ['list'] },
+  'alerts.resolve':     { group: 'Alerts', label: 'Resolve alert', script: 'human-needed.js', args: ['resolve'], argPattern: OP_ID, argHint: 'alert key', mutates: true },
+  'watchdog.actions':   { group: 'Alerts', label: 'Actions watchdog (dry run)', script: 'actions-watchdog.js', args: ['--dry-run'] },
+  'brain.status':       { group: 'Brain', label: 'Brain sync status', script: 'brain-sync.js', args: ['--status'] },
+  'brain.sync':         { group: 'Brain', label: 'Brain sync (pull/commit/push)', script: 'brain-sync.js', args: [], mutates: true, timeoutMs: 180_000 },
+  'graph.query':        { group: 'Brain', label: 'Query repo graph', script: 'graph/graph-query.js', args: ['agentsystem'], argPattern: /^[\w][\w .,'"@\/-]{0,119}$/, argHint: 'keywords' },
+  'agents.check':       { group: 'Fleet', label: 'Agent sync — check drift', script: 'sync-agents.js', args: ['--check'] },
+  'agents.sync':        { group: 'Fleet', label: 'Agent sync — write', script: 'sync-agents.js', args: [], mutates: true },
+  'hooks.check':        { group: 'Fleet', label: 'Hooks — check drift', script: 'deploy-hooks.js', args: ['--check'] },
+  'hooks.deploy':       { group: 'Fleet', label: 'Hooks — deploy + register', script: 'deploy-hooks.js', args: [], mutates: true },
+  'cost.today':         { group: 'Fleet', label: 'Session cost', script: 'session-cost.js', args: [] },
+};
+
+// Ops run as a child node process, never through a shell, and always with a hard timeout —
+// a wedged tool would otherwise hold the HTTP request (and a subprocess) open forever.
+function runNodeTool(scriptRel, args, timeoutMs = OPS_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const child = spawn(process.argv[0], [path.join(TOOLS_DIR, scriptRel), ...args], {
+      cwd: path.join(TOOLS_DIR, '..'),
+      env: { ...process.env, HOME },
+      windowsHide: true,
+    });
+    let out = '', settled = false;
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, out });
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      out += `\n[ops] killed after ${timeoutMs}ms`;
+      finish(124);
+    }, timeoutMs);
+    child.stdout?.on('data', d => out += d);
+    child.stderr?.on('data', d => out += d);
+    child.on('close', code => finish(code ?? 0));
+    child.on('error', err => { out += `\n[ops] spawn failed: ${err.message}`; finish(127); });
+  });
+}
+
+// ── skills / slash commands discovery (GET /skills) ──────────────────────────
+function safeReaddir(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+}
+
+// Only the frontmatter `description:` — enough for the panel to label a chip, and it avoids
+// shipping whole SKILL.md bodies (some are thousands of lines) over the wire.
+function frontmatterDescription(file) {
+  try {
+    const head = readFileSync(file, 'utf8').slice(0, 4000);
+    return head.match(/^description:\s*(.+)$/m)?.[1].replace(/^["']|["']$/g, '').trim() || '';
+  } catch { return ''; }
+}
+
+function listSkillsAndCommands() {
+  const marketplaces = `${HOME}/.claude/plugins/marketplaces`;
+  const plugins = safeReaddir(marketplaces).filter(e => e.isDirectory()).map(e => e.name);
+
+  const skills = [];
+  const skillRoots = [
+    { root: `${HOME}/.claude/skills`, source: 'user' },
+    ...plugins.map(p => ({ root: `${marketplaces}/${p}/skills`, source: p })),
+  ];
+  for (const { root, source } of skillRoots) {
+    for (const entry of safeReaddir(root)) {
+      if (!entry.isDirectory()) continue;
+      const file = `${root}/${entry.name}/SKILL.md`;
+      if (!existsSync(file)) continue;
+      skills.push({ name: entry.name, source, description: frontmatterDescription(file) });
+    }
+  }
+
+  const commands = [];
+  const cmdRoots = [
+    { root: `${HOME}/.claude/commands`, source: 'user' },
+    ...plugins.map(p => ({ root: `${marketplaces}/${p}/commands`, source: p })),
+  ];
+  for (const { root, source } of cmdRoots) {
+    for (const entry of safeReaddir(root)) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      commands.push({
+        name: entry.name.replace(/\.md$/, ''),
+        source,
+        description: frontmatterDescription(`${root}/${entry.name}`),
+      });
+    }
+  }
+
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  return { skills: skills.sort(byName), commands: commands.sort(byName), agents: VALID_AGENTS };
 }
 
 // The claude CLI cold-starts in ~13s on this box. Every shell-out needs a hard
@@ -923,107 +1161,8 @@ async function handleRequest(req, res) {
     if (isMissionControlFormat) {
       // NEW FORMAT: Mission Control dispatch
       const { harness, prompt, repo, agent = null, model = null } = parsed;
-
-      // Validate required fields
-      if (!harness) return json(res, 400, { error: 'harness required (claude or agy)' });
-      if (!prompt) return json(res, 400, { error: 'prompt required' });
-      if (!repo) return json(res, 400, { error: 'repo required (slug from allowlist)' });
-
-      if (!['claude', 'agy'].includes(harness)) {
-        return json(res, 400, { error: `Unknown harness "${harness}". Valid: claude, agy` });
-      }
-
-      // model reaches a spawn arg list here and (on a concurrency-cap requeue) a win32 shell
-      // string in event-dispatcher.js, so it is shape-checked at the boundary, not downstream.
-      if (model !== null && !/^[A-Za-z0-9._-]{1,64}$/.test(String(model))) {
-        return json(res, 400, { error: `Invalid model id: ${model}` });
-      }
-
-      // Validate repo against allowlist
-      const knownRepos = loadKnownRepos();
-      let repoPath;
-      try {
-        const validated = validateRepo(repo, knownRepos);
-        repoPath = validated.path;
-      } catch (e) {
-        return json(res, 403, { error: e.message });
-      }
-
-      // CONCURRENCY CAP: Enforce max 1 concurrent session per harness (CEO requirement)
-      // See https://github.com/Zene8/AgentSystem/issues/95 — autonomy constraints
-      reapDeadAgySessions();
-      const running = registry.getRunning().filter(s => s.harness === harness);
-      if (running.length > 0) {
-        return json(res, 409, {
-          error: `${harness} harness already running`,
-          running: running[0],
-          message: 'Max 1 concurrent session per harness. Wait for current session to complete.',
-        });
-      }
-
-      // The roster is synced to BOTH harnesses by tools/sync-agents.js (agy gets it as
-      // the `agentsystem` plugin), so the same names are valid for agy via `agy --agent`.
-      if (agent && !VALID_AGENTS.includes(agent.toLowerCase())) {
-        return json(res, 400, { error: `Unknown agent: ${agent}` });
-      }
-      if (harness === 'claude' && !agent) {
-        return json(res, 400, { error: 'agent required for claude harness' });
-      }
-
-      // Create session registry entry
-      const sessionRecord = registry.createSession({
-        harness,
-        repo,
-        prompt,
-        agent: agent ? agent.toLowerCase() : null,
-        // Recorded for both harnesses — the claude harness honors it too now (--model), so the
-        // panel must be able to show which tier a session actually ran at.
-        model,
-      });
-
-      try {
-        let dispatchResult;
-        if (harness === 'claude') {
-          // agent presence + roster membership are already validated above, before the
-          // registry entry exists — no need to create a session just to fail it.
-          dispatchResult = await dispatchClaude(agent.toLowerCase(), prompt, repoPath, model);
-        } else {
-          // Dispatch agy — agent is optional; omitted means agy's default agent.
-          dispatchResult = await spawnAgyPersistent(prompt, repoPath, model, agent ? agent.toLowerCase() : null);
-        }
-
-        // Update registry with dispatch result
-        if (dispatchResult.sessionId) {
-          registry.updateSession(sessionRecord.id, {
-            status: 'running',
-            logPath: dispatchResult.logPath || dispatchResult.logFile || null,
-            harnessSessionId: dispatchResult.sessionId,
-            tmuxSession: dispatchResult.tmuxSession || null,
-            pid: dispatchResult.pid || null
-          });
-        } else {
-          registry.exitSession(sessionRecord.id, dispatchResult.exitCode || 1);
-        }
-
-        console.log(`[mc-${harness}] repo=${repo} id=${sessionRecord.id} prompt="${prompt.slice(0, 60)}"`);
-        return json(res, 202, {
-          id: sessionRecord.id,
-          harness,
-          repo,
-          status: dispatchResult.status || 'running',
-          spawnedAt: sessionRecord.spawnedAt,
-          logUrl: `${publicBaseUrl({
-            publicUrl: PUBLIC_URL,
-            hostHeader: req.headers.host,
-            forwardedProto: req.headers['x-forwarded-proto'],
-            port: PORT,
-          })}/log/${sessionRecord.id}`,
-        });
-      } catch (e) {
-        registry.exitSession(sessionRecord.id, 1);
-        console.error(`[mc-${harness}] dispatch error:`, e.message);
-        return json(res, 500, { error: `Dispatch failed: ${e.message}` });
-      }
+      const { code, body } = await dispatchOne({ harness, prompt, repo, agent, model, req });
+      return json(res, code, body);
     } else {
       // LEGACY FORMAT: Panel dispatch (backward compat).
       // Routed through SessionRegistry (same as the Mission Control format)
@@ -1038,11 +1177,12 @@ async function handleRequest(req, res) {
       }
 
       const running = registry.getRunning().filter(s => s.harness === 'claude');
-      if (running.length > 0) {
+      if (running.length >= MAX_PER_HARNESS) {
         return json(res, 409, {
-          error: 'claude harness already running',
-          running: running[0],
-          message: 'Max 1 concurrent session per harness. Wait for current session to complete.',
+          error: 'claude harness at capacity',
+          running: running.length,
+          cap: MAX_PER_HARNESS,
+          message: `Max ${MAX_PER_HARNESS} concurrent claude sessions (MC_MAX_PER_HARNESS). Wait or stop one.`,
         });
       }
 
@@ -1072,6 +1212,95 @@ async function handleRequest(req, res) {
       return json(res, 200, { status: 'dispatched', id: sessionRecord.id, agent, shortId: run.shortId, logId: run.logId,
         monitor: run.shortId ? `claude attach ${run.shortId}` : null });
     }
+  }
+
+  // POST /swarm — dispatch N tasks in one call: { harness, repo, model?, tasks:[{agent,prompt,repo?,model?}] }
+  // Sequential on purpose: each task re-checks the per-harness cap and writes its own registry
+  // row, so a swarm that overruns capacity returns partial success instead of blowing past it.
+  if (req.method === 'POST' && pathname === '/swarm') {
+    const { parsed } = await readBody(req);
+    const { harness = 'claude', repo, model = null, tasks } = parsed;
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      return json(res, 400, { error: 'tasks required: [{agent, prompt}]' });
+    }
+    if (tasks.length > MAX_SWARM_TASKS) {
+      return json(res, 400, { error: `Too many tasks (${tasks.length}); max ${MAX_SWARM_TASKS}` });
+    }
+
+    auditLog('run_swarm', req, { harness, repo: repo || 'per-task', count: tasks.length, model });
+
+    const dispatched = [], rejected = [];
+    for (const [i, t] of tasks.entries()) {
+      const result = await dispatchOne({
+        harness,
+        repo: t.repo || repo,
+        prompt: t.prompt,
+        agent: t.agent ?? null,
+        model: t.model ?? model,
+        req,
+      });
+      if (result.code === 202) dispatched.push(result.body);
+      else rejected.push({ index: i, agent: t.agent ?? null, code: result.code, ...result.body });
+    }
+
+    console.log(`[mc-swarm] harness=${harness} dispatched=${dispatched.length} rejected=${rejected.length}`);
+    // 202 when anything launched; 409 when the whole swarm bounced (cap/validation).
+    return json(res, dispatched.length ? 202 : 409, {
+      harness, requested: tasks.length, dispatched, rejected,
+      cap: MAX_PER_HARNESS,
+    });
+  }
+
+  // GET /skills — skills and slash commands available to a dispatched session, so the panel can
+  // offer them instead of the operator remembering names. Prompt prefixed with `/<name>` works
+  // through `claude -p`, which is how a dispatched session invokes either one.
+  if (req.method === 'GET' && pathname === '/skills') {
+    return json(res, 200, listSkillsAndCommands());
+  }
+
+  // GET /ops — the allowlisted maintenance operations, for rendering the Ops tab.
+  if (req.method === 'GET' && pathname === '/ops') {
+    return json(res, 200, {
+      ops: Object.entries(OPS).map(([id, o]) => ({
+        id, label: o.label, group: o.group,
+        mutates: !!o.mutates,
+        arg: o.argPattern ? { required: true, hint: o.argHint || '' } : null,
+      })),
+    });
+  }
+
+  // POST /ops/run — { id, arg? }. Runs one registry entry. No shell, no free-form command:
+  // the script and its flags come from OPS, and a caller-supplied arg is passed as a single
+  // execFile argument only when that entry declares a pattern and the value matches it.
+  if (req.method === 'POST' && pathname === '/ops/run') {
+    const { parsed } = await readBody(req);
+    const { id, arg = null } = parsed;
+
+    const op = Object.prototype.hasOwnProperty.call(OPS, id) ? OPS[id] : null;
+    if (!op) return json(res, 400, { error: `Unknown op: ${id}` });
+
+    const args = [...op.args];
+    if (op.argPattern) {
+      if (!arg || !op.argPattern.test(String(arg))) {
+        return json(res, 400, { error: `Op ${id} requires arg matching ${op.argPattern}` });
+      }
+      args.push(String(arg));
+    } else if (arg) {
+      return json(res, 400, { error: `Op ${id} takes no argument` });
+    }
+
+    auditLog('run_op', req, { id, arg: arg || null, mutates: !!op.mutates });
+
+    const started = Date.now();
+    const { code, out } = await runNodeTool(op.script, args, op.timeoutMs);
+    // Exit code is data, not failure: `--check` ops exit 1 on drift and actions-watchdog exits 3
+    // on a detected outage. Both are successful runs of the op with a meaningful verdict.
+    return json(res, 200, {
+      id, arg: arg || null, exitCode: code, ms: Date.now() - started,
+      command: `node tools/${op.script} ${args.join(' ')}`.trim(),
+      output: out.slice(-20_000),
+    });
   }
 
   // GET /health — health status

@@ -11,7 +11,7 @@ Spawn, monitor, stop, and cost-track agent runs from a phone or browser.
 |------|------|
 | `webhook-server.js` | HTTP REST API + panel host. Linux only. |
 | `panel.html` | Mobile web panel (served at `/panel`, installable as a PWA). |
-| `session-registry.js` | Durable session records; enforces 1 concurrent session per harness. |
+| `session-registry.js` | Durable session records; backs the per-harness concurrency cap (`MC_MAX_PER_HARNESS`, default 4). |
 | `agy-dispatcher.js` | Positional-arg wrapper around the agy persistence layer. |
 | `agy-persistence.js` | Tmux-backed persistent agy sessions; falls back to direct spawn without tmux. |
 | `repo-validator.js` | Resolves a repo slug against the `known-repos.json` allowlist. |
@@ -107,6 +107,10 @@ instead. `/favicon.ico`, `/icon.svg`, and `/sw.js` are unauthenticated (no secre
 | GET | `/diff?pr=` | Unified diff for a PR (truncated at 200 000 chars). |
 | GET | `/branches?repo=` | Branches, worktrees, dirty-file count for an allowlisted repo. |
 | POST | `/run` | Spawn a session (see below). |
+| POST | `/swarm` | Spawn several sessions in one call (see below). |
+| GET | `/skills` | Installed skills, slash commands, agent roster — for the panel's picker. |
+| GET | `/ops` | Allowlisted maintenance operations. |
+| POST | `/ops/run` | Run one. Body: `{id, arg?}`. Strict registry, no shell. |
 | POST | `/stop` | Stop a session. Body: `{id}`. |
 | POST | `/reply` | Answer a session waiting on input. Body: `{sessionId, message}`. |
 | POST | `/pr` | Act on a PR. Body: `{number, action: ready\|merge\|comment, body?}`. |
@@ -124,8 +128,37 @@ Mission Control format — repo must be an allowlisted slug:
 Legacy panel format (`{agent, prompt, cwd?}`) is still accepted and now routes
 through the same registry, so it obeys the same concurrency cap.
 
-Returns `202` with `{id, harness, repo, status, logUrl}`. Returns `409` if that
-harness already has a running session — the cap is 1 per harness.
+Returns `202` with `{id, harness, repo, status, logUrl}`. Returns `409` when the harness is at
+capacity — `MC_MAX_PER_HARNESS` concurrent sessions, default 4 (it was a hard 1 until #95 was
+revisited). `MC_MAX_BG_SESSIONS` (default 8) caps total background sessions across harnesses.
+
+### POST /swarm
+
+N tasks in one call, against one repo:
+
+```json
+{ "harness": "claude", "repo": "agentsystem", "tasks": [
+  { "agent": "sam",    "prompt": "security-review the open PRs" },
+  { "agent": "friday", "prompt": "review the same PRs for correctness" }
+] }
+```
+
+Each task goes through the same validation, cap check and registry write as one `/run` — a swarm
+is N of those, not a second dispatch path. Max 20 tasks per request. Returns `202` with
+`{dispatched: [...], rejected: [...]}` when anything launched, `409` when the whole batch bounced.
+Tasks over the cap come back in `rejected` with a reason instead of failing the batch.
+
+Note the spawn dedupe key includes the prompt: without it, a swarm of several tasks on the same
+agent+repo would have all but the first swallowed as duplicates.
+
+### GET /ops, POST /ops/run
+
+The Ops tab's buttons. `OPS` in `webhook-server.js` is a strict registry — each entry names one
+script under `tools/` plus its fixed flags, and a caller-supplied argument is accepted only where
+the entry declares an `argPattern` and only if it matches. There is no free-form command field:
+this endpoint is reachable over the network with a bearer key. Exit code is returned as data —
+`--check` ops exit 1 on drift and `actions-watchdog.js` exits 3 on a detected outage; both are
+successful runs with a verdict. Ops marked `mutates` are confirmed in the panel before running.
 
 ### POST /reply
 
@@ -156,9 +189,11 @@ limit (100 req/min) → timing-safe bearer auth.
   repeat lockouts up to 24h.
 - **Audit log** — `~/.claude/mission-control-audit.jsonl` records run/stop/log-view
   and memory writes.
-- **Spawn guards** — identical `agent|cwd` spawns within 30s are deduped; beyond 5
-  concurrent background sessions the trigger is queued on the event bus rather than
-  dropped.
+- **Spawn guards** — identical `agent|cwd|model|prompt` spawns within 30s are deduped;
+  beyond `MC_MAX_BG_SESSIONS` (default 8) concurrent background sessions the trigger is
+  queued on the event bus rather than dropped.
+- **Ops allowlist** — `/ops/run` can only run entries in the `OPS` registry, with a
+  pattern-validated single argument. No shell, no caller-supplied command path.
 
 Binding off-loopback exposes agent spawn to anyone who obtains the bearer key.
 Prefer an SSH tunnel or Tailscale; rotate `~/.claude/remote-webhook.key` periodically.
