@@ -65,13 +65,8 @@ jobs:
     timeout-minutes: 180
     # tools/human-needed.js opens/closes the `human-needed` tracking issue from the preflight and
     # cleanup steps below.
-    # contents+pull-requests are NOT optional (#243): stage 2 executes AI-actionable items as draft
-    # PRs, so it must push a branch and open a PR. With `issues: write` alone the token reported
-    # push:false and two committed, tested branches were stranded on the runner with no PR — the run
-    # "succeeded" while its actual output was lost. A stranded branch is worse than a failed run.
-    # Note the deliberate consequence: a PR opened by GITHUB_TOKEN does not fire `pull_request`
-    # workflows, so these open as DRAFTS by design — the human flip to ready_for_review is what
-    # triggers the Sam audit gate. That keeps the audit gate honest rather than self-approved.
+    # contents+pull-requests are declared for documentation/defense-in-depth, but (#gh-token-shadow)
+    # they do NOT drive the actual writes below — see the GH_TOKEN note in `env` for why.
     permissions:
       issues: write
       contents: write
@@ -80,9 +75,30 @@ jobs:
     # LIFE_REPO: where MC's GET /briefing reads from; keep in step with tools/mission-control/README.md.
     # ALERT_KEY: one key for "the daily triage is not working", shared with
     # daily-triage-watchdog.yml on purpose — two keys would mean two issues for one outage.
+    #
+    # #gh-token-shadow: deliberately NOT setting GH_TOKEN here. `gh` treats a GH_TOKEN env var as
+    # an absolute override — it wins even over a fully-authenticated `hosts.yml` entry, and
+    # `gh auth switch` cannot undo that at runtime ("The value of the GH_TOKEN environment
+    # variable is being used for authentication"). Setting it to `secrets.GITHUB_TOKEN` here
+    # measurably left every `gh` write in this job authenticated as `github-actions[bot]` with
+    # push:false/pull:false/triage:false/maintain:false/admin:false on this repo (#243's actual
+    # root cause — its title says "runner token cannot push" but `git push` was never the
+    # problem, since this job has no `actions/checkout` step to wire the bot token into git's
+    # credential helper; only `gh` reads GH_TOKEN, and only `gh` was broken). Leaving GH_TOKEN
+    # unset lets `gh` fall through to the self-hosted runner's own `hosts.yml` credential (a
+    # `repo`-scoped PAT), the same credential `git push` was already using — one fully-capable
+    # identity for both, instead of a bot token that this repo's Actions settings leave with no
+    # write access at all.
+    #
+    # Interaction with the #164/#228 "GITHUB_TOKEN-opened PRs don't fire pull_request" rule this
+    # job used to lean on: that recursion guard is specific to the literal built-in GITHUB_TOKEN.
+    # A PR opened with the PAT below is an ordinary authored PR, so `pull_request: opened` DOES
+    # fire for it now (sam-audit.yml, friday-audit.yml, pr-automation.yml, ...). That is safe, not
+    # a bypass: the skill still opens these `--draft`, and sam-audit.yml's job already skips
+    # `pr.draft` PRs (see its `opened (non-draft only, see job if: below)` comment) — the audit
+    # still only runs on the human's draft -> ready_for_review flip, same as before.
     env:
       LIFE_REPO: ${{ vars.LIFE_REPO || '' }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: daily-triage-down
       # Chat sources, in preference order — see chatSources() in tools/life-os-doctor.js.
