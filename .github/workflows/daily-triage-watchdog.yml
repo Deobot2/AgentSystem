@@ -41,7 +41,11 @@ jobs:
         id: check
         run: |
           set -uo pipefail
-          today=$(date -u +%F)
+          # NOT `date -u +%F`: that breaks the moment this run fires late enough to cross
+          # midnight UTC (issue #254 — see tools/watchdog-target-date.js for the full story and
+          # the regression test). This asks "what's the most recent day whose 13:00 UTC triage
+          # slot has already closed" instead of "what UTC date is it right now".
+          today=$(node tools/watchdog-target-date.js)
 
           # Look at the workflow's recent runs and ask each one how its daily-triage JOB ended.
           # The run-level conclusion is not usable here: scheduled-tasks.yml holds five jobs and
