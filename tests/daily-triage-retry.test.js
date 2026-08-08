@@ -35,7 +35,11 @@ function extractRunBlock() {
 }
 
 // plan is one outcome per invocation: 'ok' | '529' | 'badagent'
-function runStep(plan) {
+// The stub writes $LIFE_REPO/closeouts/<today>.md on `ok`, because that is what the real skill
+// does and the step now reads that file to tell a degraded run from a dead one. `closeout: true`
+// seeds it up front instead, standing in for a triage that produced its deliverable and *then*
+// exited nonzero.
+function runStep(plan, { closeout = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'triage-retry-'));
   const bin = join(dir, 'bin');
   mkdirSync(bin);
@@ -47,7 +51,9 @@ n=$(cat "$STUB_COUNT" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" > "$STUB_COUNT"
 case "$(echo "$STUB_PLAN" | cut -d, -f"$n")" in
-  ok)       echo "daily triage complete"; exit 0 ;;
+  ok)       echo "DONE: stage 2 triage complete — closeout appended"
+            echo "# closeout" > "$LIFE_REPO/closeouts/$(date +%F).md"
+            exit 0 ;;
   529)      echo "API Error: 529 Overloaded. This is a server-side issue, usually temporary"; exit 1 ;;
   badagent) echo "Error: --agent 'jarvis' not found"; exit 1 ;;
 esac
@@ -65,10 +71,20 @@ echo "stub ran more times than the plan allows"; exit 99
   writeFileSync(githubEnv, '');
   writeFileSync(join(dir, 'count'), '0');
 
+  mkdirSync(join(dir, 'closeouts'));
+  if (closeout) {
+    const today = new Date().toISOString().slice(0, 10);
+    writeFileSync(join(dir, 'closeouts', `${today}.md`), '# closeout\n\nreal content\n');
+  }
+
   let status = 0;
   let stdout = '';
   try {
-    stdout = execFileSync('bash', [script], {
+    // The exact shell GitHub Actions gives a `shell: bash` step. `-e` is the whole point: the
+    // step's own `set -uo pipefail` does NOT clear it, and running this harness under a plain
+    // `bash script` is why every assertion below passed while production died on line one of
+    // the loop (#254). Do not drop these flags to make a test go green.
+    stdout = execFileSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', script], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -116,4 +132,33 @@ test('three straight 529s give up and report the real cause to the alert', () =>
   assert.equal(r.calls, 3, 'exactly the attempt budget, no more');
   assert.equal(r.exported.TRIAGE_ATTEMPTS, '3', 'must be tries made, not one past the loop');
   assert.match(r.exported.TRIAGE_LAST_ERROR, /529/);
+});
+
+// #254. A clean run has no `API Error:`/`Connection error` line in its log, so the `last=$(grep …)`
+// that builds TRIAGE_LAST_ERROR exits 1 on no match. Under Actions' `-e` that killed the step
+// three seconds after the model printed `DONE:`, with no annotation and no TRIAGE_* exported —
+// which is exactly what runs 31152555074 / 31186667092 / 31227282327 look like. Five days red
+// while the triage was working, each red run re-raising `daily-triage-down`.
+test('a clean run stays green even though no upstream error line was captured', () => {
+  const r = runStep('ok');
+  assert.equal(r.status, 0, 'a successful triage with nothing to grep for must not fail the step');
+  assert.equal(r.calls, 1);
+  assert.equal(r.exported.TRIAGE_ATTEMPTS, '1', 'the step must reach the GITHUB_ENV write');
+  assert.match(r.exported.TRIAGE_LAST_ERROR, /no upstream error line captured/);
+});
+
+// The reconciliation. The authoritative signal that the day's work happened is the closeout, not
+// claude's exit code — a denied tool or a SessionEnd hook can taint the code after the deliverable
+// is already on disk. Warn on that, because a false-green here is worse than a false-red.
+test('a nonzero exit WITH a valid closeout is degraded-but-successful, and warns', () => {
+  const r = runStep('badagent', { closeout: true });
+  assert.equal(r.status, 0, 'the closeout exists — the day is covered, so do not report an outage');
+  assert.match(r.stdout, /::warning::/, 'degraded runs must still be visible in the log');
+  assert.match(r.stdout, /closeout/i);
+});
+
+test('a nonzero exit with NO closeout is a genuine failure and stays red', () => {
+  const r = runStep('badagent');
+  assert.notEqual(r.status, 0, 'no closeout means the triage really did not happen');
+  assert.match(r.stdout, /non-transient/);
 });
