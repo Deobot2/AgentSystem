@@ -202,7 +202,16 @@ jobs:
         env:
           REPO: ${{ steps.repo.outputs.repo }}
         run: |
-          set -uo pipefail
+          # `set +e`, not `set -e`: Actions invokes this as `bash --noprofile --norc -e -o pipefail`,
+          # and a step's own `set -uo pipefail` does NOT clear that inherited `-e` — only `set +e`
+          # does. That is why every run below died at the `claude ... | tee` pipeline the moment the
+          # model exited nonzero: the pipeline failed, errexit killed the step, and everything after
+          # it — the `rc` capture, the transient-vs-deterministic check, the whole #234 retry loop,
+          # `TRIAGE_LAST_ERROR` — has never once executed in production. The 2026-08-08 13:00 run is
+          # the clean proof: the triage finished its work ("closeout appended, 1 outbound draft
+          # queued") and the step still reported exit 1 with none of its own diagnostics printed.
+          # `-u` stays; the step ends with an explicit `exit "$rc"`, which is what should decide it.
+          set +e -uo pipefail
           # The skill writes the closeout itself (step 6) rather than this job capturing stdout:
           # it needs the file on disk before it pushes the notification, and a --bg subagent fan-out
           # means stdout is no longer a faithful transcript of the run.

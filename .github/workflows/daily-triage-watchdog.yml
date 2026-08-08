@@ -40,7 +40,13 @@ jobs:
       - name: Did a daily-triage job succeed today?
         id: check
         run: |
-          set -uo pipefail
+          # `set +e` for the reason documented at the daily-triage step in scheduled-tasks.yml:
+          # Actions runs this as `bash -e -o pipefail`, and `set -uo pipefail` does not clear the
+          # inherited `-e`. The `conclusion=$(gh api ... | head -1)` capture below is the exposed
+          # line — when that API call errors, pipefail propagates the failure into the assignment
+          # and errexit kills the step there, so the watchdog whose entire job is to notice a dead
+          # daily-triage goes silent itself, reporting neither `ok` nor `missing` (#260).
+          set +e -uo pipefail
           # NOT `date -u +%F`: that breaks the moment this run fires late enough to cross
           # midnight UTC (issue #254 — see tools/watchdog-target-date.js for the full story and
           # the regression test). This asks "what's the most recent day whose 13:00 UTC triage
