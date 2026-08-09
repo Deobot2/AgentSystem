@@ -121,6 +121,12 @@ Mission Control's `GET /briefing` serves.
   the network probes; `--alert` opens/closes the coverage issue.
 - **The skills are gitignored** (#187) and git will never carry them. Ship them from the machine
   that has them: `bash tools/deploy-private-skills.sh --host <user@host>`.
+- Because there is no shared source of truth, the per-host copies can **fork**, and they did:
+  a fix applied on the runner was five days newer than the laptop's copy, and a routine deploy
+  would have overwritten it silently (#298, which re-opened #257). The deploy now hashes both
+  sides first and **refuses** to overwrite a target copy that is different *and* newer; `--force`
+  is the only way past it. `--check --host <user@host>` reports that drift without deploying —
+  the bare `--check` only compares source-vs-installed on one host and cannot see it.
 - Stage 2 needs `~/dev/AgentSystem` to exist — the skill's GitHub sweep runs there.
 - A missed or failed run raises a `human-needed` issue from two directions: the job itself, and
   `daily-triage-watchdog.yml` on GitHub-hosted infra, so a dead self-hosted runner cannot hide the
