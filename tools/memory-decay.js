@@ -4,7 +4,7 @@
 import { join } from 'node:path';
 import {
   agentMemoryRoot,
-  readGraph,
+  readGraphIfExists,
   writeGraph,
   decayedVisitScore,
   recomputeComposite,
@@ -75,12 +75,13 @@ function main() {
 
   const graphPath = join(agentMemoryRoot(), 'nexus', brain, 'graph.json');
 
-  let graph;
-  try {
-    graph = readGraph(graphPath);
-  } catch (err) {
-    console.error(`Error: graph.json not found at ${graphPath}`);
-    process.exit(1);
+  const graph = readGraphIfExists(graphPath);
+  if (!graph) {
+    // A brain that has never been initialized on this host has no graph.json yet --
+    // that's a normal state (per-repo/agent brains are gitignored), not a failure.
+    // Skip cleanly rather than hard-exiting, and don't write a placeholder graph.
+    console.log(`decay pass [${brain}]: no graph.json at ${graphPath} -- brain not initialized on this host, skipping`);
+    return;
   }
 
   const now = Date.now();

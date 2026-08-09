@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import {
   agentMemoryRoot,
-  readGraph,
+  readGraphIfExists,
   writeGraph,
   pruneOrphanedEdges,
   parseFrontmatter,
@@ -74,12 +74,12 @@ function main() {
   const nexusDir = join(agentMemoryRoot(), 'nexus', brain);
   const graphPath = join(nexusDir, 'graph.json');
 
-  let graph;
-  try {
-    graph = readGraph(graphPath);
-  } catch (err) {
-    console.error(`Error: graph.json not found at ${graphPath}`);
-    process.exit(1);
+  const graph = readGraphIfExists(graphPath);
+  if (!graph) {
+    // Brain not initialized on this host yet -- normal state, not a failure. See
+    // memory-decay.js for the same guard and rationale.
+    console.log(`stale scan [${brain}]: no graph.json at ${graphPath} -- brain not initialized on this host, skipping`);
+    return;
   }
 
   // --contradictions mode: list superseded nodes
