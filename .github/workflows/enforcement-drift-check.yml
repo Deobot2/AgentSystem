@@ -97,6 +97,17 @@ jobs:
             echo "PASSED: brain-sync timer installed"
           fi
 
+          echo "=== Checking skill parity drift (#305) ==="
+          # --require-install: this runner is supposed to have skills deployed, same reasoning as
+          # the hook check above — a bare ~/.claude/skills here is the outage, not a clean skip.
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/install-skills.js" --check --require-install; then
+            echo "::error::Skill parity drift detected — installed skill(s) differ from or are missing relative to the repo"
+            driftFound=1
+            results="${results}• Skill parity drift detected (tools/install-skills.js --check)\n"
+          else
+            echo "PASSED: No skill parity drift"
+          fi
+
           echo "=== Checking actions-watchdog heartbeat freshness (#313) ==="
           # The watchdog cannot report its own staleness (a dead timer runs no code), so this
           # assertion lives here instead — a separate schedule that does not depend on the
@@ -148,6 +159,7 @@ jobs:
           node tools/sync-agents.js --check
           node tools/routines.js verify
           bash tools/install-brain-sync-timer.sh --check
+          node tools/install-skills.js --check
           \`\`\`
 
           Then fix the drift and push. Common causes:
@@ -156,6 +168,7 @@ jobs:
           • Cron routine added to config/routines.yml but corresponding job not added to workflow, or vice versa
           • Hard cron routine marked enforce:hard but missing from workflow
           • Memory sync timer never installed on this host, or pointing at a checkout that moved: \`bash tools/install-brain-sync-timer.sh\`
+          • Skill added/edited under skills/ but install-skills.js not re-run on this host (#305)
 
           Re-run this check after fixing to verify and close the alert." \
             || echo "::warning::could not raise human-needed alert"
