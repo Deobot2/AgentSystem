@@ -32,12 +32,18 @@ on:
     # slot-suffixed file at all.
     - cron: '0 13 * * *'
     - cron: '0 5 * * *'
+    # weekly-agent-review: Saturday 9am UTC
+    - cron: '0 9 * * 6'
   workflow_dispatch:
     inputs:
       job:
-        description: 'Which job to run manually (currently only daily-triage)'
+        description: 'Which job to run manually'
         required: false
         default: daily-triage
+        type: choice
+        options:
+          - daily-triage
+          - weekly-agent-review
 
 jobs:
   # Life OS daily triage — STAGE 2 of the daily cadence.
@@ -59,7 +65,10 @@ jobs:
   # Jarvis (opus, high effort) rather than Threepio: this run spawns per-item subagents, which is
   # orchestration, not writing. Concurrency and item caps live in the skill, not here.
   daily-triage:
-    if: (github.event_name == 'schedule' && (github.event.schedule == '0 13 * * *' || github.event.schedule == '0 5 * * *')) || github.event_name == 'workflow_dispatch'
+    # The dispatch arm honours the `job` input now that there is a second dispatchable job. It
+    # still defaults to daily-triage, so a bare `gh workflow run scheduled-tasks.yml` behaves
+    # exactly as it always did.
+    if: (github.event_name == 'schedule' && (github.event.schedule == '0 13 * * *' || github.event.schedule == '0 5 * * *')) || (github.event_name == 'workflow_dispatch' && inputs.job == 'daily-triage')
     runs-on: [self-hosted, Linux]
     # Generous: 10 items x up to 30min each, batched 4 at a time, plus the gather pass.
     timeout-minutes: 180
@@ -407,3 +416,167 @@ jobs:
         shell: bash
         run: node "${{ github.workspace }}/tools/deploy-hooks.js" --check
         continue-on-error: true
+
+  # Weekly agent fleet review. Self-hosted because every input is local machine state:
+  # ~/agent-memory/nexus/routing-log.jsonl, session-log.jsonl, and this host's checkout.
+  #
+  # A real headless Jarvis run, not a fixed script, because the deliverable is a judgement no tool
+  # emits: session-cost.js says the week cost $N and routing-report.js says branch X hit 60%, but
+  # "which agent is being handed work it keeps bouncing, and what should change" is the review.
+  # That costs roughly one unattended opus run a week, which is the deliberate trade for having the
+  # routine enforced at all — see config/routines.yml.
+  #
+  # No checkout step: like daily-triage, this reads the host's real working copy (routing history,
+  # the brain, git history that a fresh shallow checkout does not have). REPO is resolved rather
+  # than hardcoded to $HOME/dev/AgentSystem for the same reason it is there — that symlink is an
+  # invariant nothing creates or verifies.
+  weekly-agent-review:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 9 * * 6') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-agent-review')
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 60
+    # Documentation/defense-in-depth only: GH_TOKEN is deliberately unset here too, so `gh` falls
+    # through to the runner's own hosts.yml credential. See the #gh-token-shadow note on
+    # daily-triage for why setting it would silently break every `gh` write in the job.
+    permissions:
+      issues: write
+      contents: read
+      pull-requests: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: weekly-agent-review-down
+    steps:
+      - name: Resolve the working copy
+        id: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem"; do
+            if [ -d "$candidate/tools" ]; then
+              echo "repo=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Using $candidate"
+              [ "$candidate" = "$HOME/dev/AgentSystem" ] || \
+                echo "::warning::$HOME/dev/AgentSystem is missing; fell back to $candidate."
+              exit 0
+            fi
+          done
+          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem or $HOME/AgentSystem."
+          exit 1
+
+      # The deterministic numbers run first and print into the log unconditionally, so a failed or
+      # refused model call still leaves the week's costs and routing accuracy somewhere a human can
+      # read them. Neither tool is allowed to fail the job: an empty session-log (a quiet week, a
+      # rotated log) is not an outage, and losing the review over it would be the #234 mistake again.
+      - name: Collect the week's raw numbers
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          set +e -uo pipefail
+          echo "::group::session costs (last 7 days)"
+          node "$REPO/tools/session-cost.js" --week || echo "::warning::session-cost.js exited nonzero"
+          echo "::endgroup::"
+          echo "::group::routing accuracy"
+          node "$REPO/tools/routing-report.js" || echo "::warning::routing-report.js exited nonzero"
+          echo "::endgroup::"
+
+      # Retried on transient upstream errors only, for the reasons written out at the daily-triage
+      # step above (#234). Weekly, a lost window costs a week rather than a day, so the retry earns
+      # its keep even though the run is cheap.
+      - name: Weekly agent review (Jarvis)
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          # `set +e` deliberately: Actions runs steps under an inherited `-e` that a step's own
+          # `set -uo pipefail` does not clear, which silently killed every retry loop in the
+          # daily-triage step. Same shape here, same fix; `exit "$rc"` decides the step.
+          set +e -uo pipefail
+          log="${RUNNER_TEMP:-/tmp}/weekly-agent-review.log"
+          # `Jarvis`, capitalised — agent names are case-sensitive and come from the `name:`
+          # frontmatter in .agents/agents/<name>.md.
+          prompt=$(cat <<'EOF'
+          Weekly agent fleet review for the AgentSystem fleet. Read-only except for the decision
+          record at the end; Write and Edit are denied by the harness, so do not try to change files.
+
+          Gather:
+          1. Routing — node tools/routing-report.js, and read ~/agent-memory/nexus/routing-log.jsonl
+             for the last 7 days. Which agents were misrouted to, and what do the misroutes have in
+             common?
+          2. Cost — node tools/session-cost.js --week. Flag anything anomalous against the weeks
+             before it (the log holds the history), not against an absolute number.
+          3. Blockers — gh issue list --label human-needed --state open, and gh pr list --state open.
+             Call out anything open more than 7 days, and any PR blocked on Sam's audit.
+          4. Goals — read the open issues and the last week of git log on main. Did the week's merged
+             work move the stated goals, or was it maintenance?
+
+          Then write ONE decision record with the verdict and the single most valuable change to make
+          next week:
+
+          node tools/decision-log.js --write --agent=Jarvis --project=agentsystem \
+            --title="Weekly agent review <YYYY-MM-DD>" \
+            --decision="<the one change to make next week>" \
+            --rationale="<routing, cost, blocker and goal findings that support it>"
+
+          Keep the rationale specific — numbers and issue/PR references, not adjectives. Finish by
+          printing DONE: followed by a one-line summary.
+          EOF
+          )
+          attempts=3
+          rc=1
+          attempt=1
+          while [ "$attempt" -le "$attempts" ]; do
+            echo "::group::weekly-agent-review attempt $attempt of $attempts"
+            claude --agent Jarvis \
+              --add-dir "$REPO" \
+              --add-dir "$HOME/agent-memory" \
+              --settings "$REPO/config/weekly-agent-review-permissions.json" \
+              -p "$prompt" 2>&1 | tee "$log"
+            rc=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            [ "$rc" -eq 0 ] && break
+            if ! grep -Eqi 'API Error: (429|500|502|503|504|529)|Overloaded|Connection error|ECONNRESET|connection reset' "$log"; then
+              echo "::error::weekly-agent-review failed with a non-transient error (exit $rc). Not retrying — see the log above."
+              break
+            fi
+            [ "$attempt" -ge "$attempts" ] && break
+            if [ "$attempt" -eq 1 ]; then backoff=60; else backoff=300; fi
+            echo "::warning::transient upstream error (exit $rc) on attempt $attempt — retrying in ${backoff}s"
+            sleep "$backoff"
+            attempt=$((attempt + 1))
+          done
+
+          # Reconcile the exit code against the deliverable, same reasoning as the closeout check in
+          # daily-triage: the decision record is what this job exists to produce, so a nonzero exit
+          # with the record on disk is degraded-but-successful. With no record, `rc` stands.
+          if ls "$HOME/agent-memory/nexus/decisions/$(date +%F)"-*.md >/dev/null 2>&1; then
+            [ "$rc" -ne 0 ] && echo "::warning::claude exited $rc but today's decision record exists — treating as degraded-but-successful."
+            rc=0
+          elif [ "$rc" -eq 0 ]; then
+            echo "::error::claude exited 0 but wrote no decision record for $(date +%F) — the review did not produce its one deliverable."
+            rc=1
+          fi
+          exit "$rc"
+
+      # Out-of-band, for the same reason daily-triage has one: a red weekly run emails an inbox that
+      # is triaged on a weekday, so a quiet failure can eat several weeks before anyone notices.
+      - name: Clear the human-needed alert
+        if: success()
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          node "$REPO/tools/human-needed.js" resolve "$ALERT_KEY" \
+            --comment "Weekly agent review completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ)." \
+            || echo "::warning::could not clear the human-needed alert"
+
+      - name: Raise the human-needed alert (run failed)
+        if: failure()
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+        run: |
+          node "$REPO/tools/human-needed.js" raise "$ALERT_KEY" \
+            --title "[AgentSystem]: the weekly agent review is failing" \
+            --why "The Saturday review failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." \
+            --action "Read the run log. Usual causes: the \`claude\` CLI missing or unauthenticated on this host, a denied tool the review needed (widen config/weekly-agent-review-permissions.json in a PR, not on the box), or ~/agent-memory being unwritable. Re-run with \`gh workflow run scheduled-tasks.yml -f job=weekly-agent-review\`; this issue closes itself on the next successful run." \
+            || echo "::warning::could not raise the human-needed alert"

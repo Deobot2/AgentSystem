@@ -103,26 +103,23 @@
 # Task Scheduler manually or via setup-scheduled-tasks.ps1" on a Linux host (#200). The compile
 # step lying about enforcement was the defect; the dead routines were the symptom.
 
-# DISABLED — no workflow job exists for this one, so nothing can fire it.
+# Enabled, and it costs money: the `weekly-agent-review` job in scheduled-tasks.yml is a real
+# headless Jarvis run, roughly one unattended opus session a week. That was the open question that
+# kept this routine disabled — the mechanics were never the hard part, the spending call was — and
+# it is now a deliberate yes. A fixed script was the cheaper option and was rejected: session-cost
+# and routing-report already print the numbers, and the numbers are not the review.
 #
-# Kept in the registry rather than deleted, because the intent is still worth having: a weekly
-# review of routing misroutes, session costs, blockers and the goal scorecard. What is missing is
-# the decision to pay for it — adding a Saturday job to scheduled-tasks.yml commits to a weekly
-# unattended opus run, which is a spending call, not a mechanical fix.
-#
-# It is `enabled: false` and not `enforce: hard`-while-unregistered on purpose. A routine that
-# claims enforcement nothing can deliver is the #200 defect itself; disabled-and-documented is the
-# honest state. To turn it on: add a `weekly-agent-review` job to the workflow, then
-# `node tools/routines.js enable weekly-agent-review`. `verify` will hold you to both.
+# The job's own deliverable check is what keeps this honest. It fails when no decision record was
+# written for the day, so "the model ran and said something agreeable" cannot pass as a review.
 - id: weekly-agent-review
-  description: Saturday agent fleet review (goal scorecard, risk scan, agent performance)
+  description: Saturday agent fleet review (routing misroutes, session costs, blockers, goals)
   trigger: schedule
   mechanism: cron
   schedule: "0 9 * * 6"
   task_name: AgentSystem-WeeklyAgentReview
   enforce: hard
-  enabled: false
-  action: "Weekly agent review (headless Jarvis via `claude --bg`): review routing-log.jsonl misroutes, session costs (node ~/dev/AgentSystem/tools/session-cost.js --week), open blockers, and goal scorecard. Log outcome via decision-log.js."
+  enabled: true
+  action: "Weekly agent review runs unattended (Sat 09:00 UTC, `weekly-agent-review` job): headless Jarvis reviews routing misroutes, session costs, open blockers and goals, then writes one decision record. Read it via `node ~/dev/AgentSystem/tools/decision-log.js --list`; do not run it by hand."
 
 - id: weekly-brain-review
   description: Monday brain consolidation (full memory sleep cycle + reflection)
