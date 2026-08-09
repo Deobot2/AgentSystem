@@ -20,6 +20,8 @@ on:
     - cron: '0 8 * * 1'
     # weekly-memory-decay + weekly-trust-scores + weekly-hygiene: Sunday midnight UTC
     - cron: '0 0 * * 0'
+    # enforcement-drift-check: daily 3am UTC
+    - cron: '0 3 * * *'
     # daily-triage (Life OS stage 2): TWICE daily, anchored to Pacific.
     #   13:00 UTC = 06:00 PDT (morning run)
     #   05:00 UTC = 22:00 PDT (evening run, the PREVIOUS Pacific day)
@@ -46,6 +48,100 @@ on:
           - weekly-agent-review
 
 jobs:
+  # Enforcement drift check — verify repo vs deployed state consistency.
+  # Runs daily to catch hook/agent/routine deploy drift early, before it causes outages.
+  # Raises human-needed alert on any drift detected, resolves on clean runs.
+  enforcement-drift-check:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve gh/node absolute paths for runner service context
+        id: tools
+        shell: bash
+        run: |
+          resolve() {
+            local name="$1"; shift
+            local c
+            for c in "$@"; do [ -x "$c" ] && { echo "$c"; return; }; done
+            command -v "$name" 2>/dev/null || true
+          }
+          NODE_PATH=$(resolve node "$HOME/.nvm/versions/node/*/bin/node" /usr/bin/node /usr/local/bin/node)
+          echo "Resolved node: $NODE_PATH"
+          echo "node_path=$NODE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Run enforcement drift checks
+        id: drift
+        shell: bash
+        run: |
+          set +e
+          driftFound=0
+          results=""
+
+          echo "=== Checking hook deploy + registration drift ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/deploy-hooks.js" --check; then
+            echo "FAILED: Hook drift detected"
+            driftFound=1
+            results="${results}• Hook deploy/registration drift detected\n"
+          else
+            echo "PASSED: No hook drift"
+          fi
+
+          echo "=== Checking installed agent definition drift ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/sync-agents.js" --check; then
+            echo "FAILED: Agent drift detected"
+            driftFound=1
+            results="${results}• Agent definition drift detected\n"
+          else
+            echo "PASSED: No agent drift"
+          fi
+
+          echo "=== Checking for orphan hard cron routines ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/routines.js" verify; then
+            echo "FAILED: Routine verification failed"
+            driftFound=1
+            results="${results}• Cron routine verification failed (orphan routines or cron mismatch)\n"
+          else
+            echo "PASSED: All routines verified"
+          fi
+
+          echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
+          echo "drift_results=$(printf '%b' "$results")" >> "$GITHUB_OUTPUT"
+          exit "$driftFound"
+        continue-on-error: true
+
+      - name: Raise alert on drift detected
+        if: steps.drift.outputs.drift_found == '1'
+        shell: bash
+        run: |
+          "${{ github.workspace }}/tools/human-needed.js" raise enforcement-drift \
+            --title "CI/CD enforcement drift detected" \
+            --why "Daily drift check on $(date -u +%Y-%m-%dT%H:%M:%SZ) found mismatches between repo and deployed state. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." \
+            --action "Run the three --check tools locally to diagnose:
+          \`\`\`bash
+          node tools/deploy-hooks.js --check
+          node tools/sync-agents.js --check
+          node tools/routines.js verify
+          \`\`\`
+
+          Then fix the drift and push. Common causes:
+          • Hooks edited in ~/.claude/hooks/ but not committed to repo or not deployed
+          • Agent defs edited in .agents/agents/ but sync-agents.js not run
+          • Cron routine added to config/routines.yml but corresponding job not added to workflow, or vice versa
+          • Hard cron routine marked enforce:hard but missing from workflow
+
+          Re-run this check after fixing to verify and close the alert." \
+            || echo "::warning::could not raise human-needed alert"
+          exit 1
+
+      - name: Resolve alert on clean drift check
+        if: steps.drift.outputs.drift_found == '0'
+        shell: bash
+        run: |
+          "${{ github.workspace }}/tools/human-needed.js" resolve enforcement-drift \
+            --comment "Daily enforcement drift check passed at $(date -u +%Y-%m-%dT%H:%M:%SZ). All hooks, agents, and cron routines verified in sync." \
+            || echo "::warning::could not resolve human-needed alert"
+
   # Life OS daily triage — STAGE 2 of the daily cadence.
   #
   # Stage 1 (06:00) is Grok Tasks running skills/daily-briefing/portable-prompt.md. It owns email
