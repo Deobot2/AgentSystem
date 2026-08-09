@@ -3,9 +3,15 @@ name: PR Linked Issue Check
 # Enforce that every PR to main has a linked issue (via branch name or body reference).
 # Exempts spec/plan PRs which are design/discussion only, not merged code.
 #
-# Links are detected by:
+# Candidate references are detected by:
 # - Branch name matching issue-<N>-... pattern
 # - PR body containing "closes #N", "fix #N", "resolve #N" etc.
+#
+# A candidate is only a LINK once it RESOLVES through the API to a real issue in this repo
+# (#296). Before that it was syntax-only: `Closes #99999` and a branch named `issue-0-whatever`
+# both satisfied the gate, so what it proved was that a string had been typed, not that the PR
+# was tracked. It became a required status check on main while still in that state, which is the
+# worst combination — enforcement-shaped, evidence-free.
 
 on:
   pull_request:
@@ -32,9 +38,14 @@ jobs:
       # `issues.createComment` against a PR is authorized by `pull-requests`, not `issues` — the
       # endpoint is shared but the scope check follows the resource. With only `issues: write` the
       # comment step 403s "Resource not accessible by integration", so an unlinked PR got a red X
-      # and no explanation. This workflow is `on: pull_request` and never touches an issue, so
-      # `issues:` is dropped rather than widened. Encoded in tests/workflow_permissions.test.js.
+      # and no explanation. Encoded in tests/workflow_permissions.test.js.
       pull-requests: write
+      # `issues: read` is LOAD-BEARING as of #296 and must not be dropped as unused. The check
+      # step now calls `issues.get` to prove the referenced number is a real issue here; without
+      # this scope that call errors, the step's fail-open rule (see below) accepts the reference
+      # unverified, and the gate silently reverts to the syntax-only check #296 removed — green,
+      # quiet, and worthless. tests/pr_linked_issue_check.test.js asserts this line still exists.
+      issues: read
     steps:
       - name: Check for linked issue
         id: check
@@ -47,6 +58,12 @@ jobs:
             const body = pr.body || '';
             const labels = pr.labels.map(l => l.name);
 
+            // Set both outputs up front. An unset output reads as '' downstream, which matches
+            // neither `== 'true'` nor `== 'false'`, so a path that forgets one silently produces a
+            // job where every step is skipped — a green required check that checked nothing.
+            core.setOutput('linked', 'false');
+            core.setOutput('exempt', 'false');
+
             // Exempt spec/plan PRs — they are design discussion, not merged code
             if (labels.includes('spec')) {
               core.setOutput('exempt', 'true');
@@ -54,30 +71,114 @@ jobs:
               return;
             }
 
-            // Check for issue link in branch name (issue-<N>-...)
-            const branchMatch = branch.match(/issue-(\d+)/);
-            if (branchMatch) {
-              const issueNum = branchMatch[1];
-              core.setOutput('linked', 'true');
-              core.setOutput('reason', `Linked via branch: issue-${issueNum}`);
-              return;
+            // ── 1. Collect candidate references ────────────────────────────────────────────
+            // Every candidate is collected and every one is tried, rather than returning on the
+            // first syntactic hit. A PR whose branch carries a stale number but whose body has a
+            // good `Closes #N` is genuinely tracked; failing it on the branch alone would be a
+            // deadlock with no honest remedy (renaming a pushed branch invalidates the PR).
+            const candidates = [];
+            const addCandidate = (raw, how) => {
+              const num = Number(raw);
+              // `#0` and non-integers are not issue numbers. Reject before spending an API call.
+              if (!Number.isInteger(num) || num < 1) return;
+              if (candidates.some(c => c.num === num)) return;
+              candidates.push({ num, how });
+            };
+
+            for (const m of branch.matchAll(/issue-(\d+)/g)) {
+              addCandidate(m[1], `branch name issue-${m[1]}`);
             }
 
-            // Check for issue link in PR body (closes/fix/resolve #N)
             const closeKeywords = ['close', 'closes', 'closed', 'fix', 'fixes', 'fixed', 'resolve', 'resolves', 'resolved'];
-            const bodyMatch = body.match(
-              new RegExp(`(${closeKeywords.join('|')})\\s+#(\\d+)`, 'i')
-            );
-            if (bodyMatch) {
-              const issueNum = bodyMatch[2];
-              core.setOutput('linked', 'true');
-              core.setOutput('reason', `Linked via body: ${bodyMatch[1]} #${issueNum}`);
+            const bodyRe = new RegExp(`\\b(${closeKeywords.join('|')})\\s+#(\\d+)\\b`, 'gi');
+            for (const m of body.matchAll(bodyRe)) {
+              addCandidate(m[2], `PR body "${m[1]} #${m[2]}"`);
+            }
+
+            if (candidates.length === 0) {
+              core.setOutput('reason', 'No issue reference found in the branch name or the PR body');
               return;
             }
 
-            // No link found
-            core.setOutput('linked', 'false');
-            core.setOutput('reason', 'No linked issue found');
+            // ── 2. Resolve each candidate against THIS repo ────────────────────────────────
+            // Three judgement calls, encoded on purpose so a later reader does not have to guess:
+            //
+            // * REPO. The owner/repo passed to the API is always `context.repo`, never anything
+            //   parsed out of the reference. A number therefore cannot resolve anywhere but here.
+            //   Cross-repo `owner/repo#N` syntax is not matched by the patterns above, so it reads
+            //   as "no reference" — deliberate: this gate is about traceability in THIS backlog.
+            //
+            // * PULL REQUESTS DO NOT COUNT. The REST `issues` endpoint serves pull requests too —
+            //   they share one numbering space — and a PR comes back 200 with a `pull_request`
+            //   key that a real issue never has. That key is the only reliable discriminator, and
+            //   it is what this rejects on. A PR is not a tracked work item, and `Closes #<n>`
+            //   where n is a PR number is nearly always a typo for the PR's own number, which
+            //   would let a PR satisfy the gate by pointing at itself.
+            //
+            // * CLOSED ISSUES DO COUNT. What this gate enforces is that the work has a tracked
+            //   item in this repo, not that the item is still open. Issues close before their PR
+            //   merges all the time — closed as a duplicate, closed by an earlier partial PR,
+            //   closed by hand. Requiring `state === 'open'` would make those PRs unmergeable
+            //   with no remedy except reopening an issue that should stay closed, and on a
+            //   required check with enforce_admins that is a deadlock, not a stricter gate.
+            const missing = [];
+            let infraError = null;
+
+            for (const c of candidates) {
+              let issue;
+              try {
+                const res = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: c.num,
+                });
+                issue = res.data;
+              } catch (err) {
+                // FAIL OPEN on everything that is not a definitive "this does not exist".
+                //
+                // Same deadlock class as the trigger list above, and it is the more dangerous
+                // half: this is a required status check with enforce_admins, so a rule that goes
+                // red on a rate-limit or a 5xx blocks EVERY merge in the repo simultaneously,
+                // with no non-admin way out and no code change that fixes it. A gate that is
+                // occasionally too generous is recoverable; one that can wedge the whole repo on
+                // GitHub having a bad afternoon is not.
+                //
+                // 404 alone is treated as definitive. Not 410 (returned when a repo has issues
+                // disabled, which would 410 every number at once) and not 403 (rate limit, or a
+                // missing `issues: read` scope — and on a private repo an unauthorized read is
+                // reported as 404, which is precisely why that scope is declared above and
+                // test-pinned rather than left to chance).
+                if (err.status === 404) {
+                  missing.push(`#${c.num} (from ${c.how}) does not exist`);
+                  continue;
+                }
+                infraError = `HTTP ${err.status || '?'}: ${err.message}`;
+                core.warning(`Could not resolve #${c.num} — ${infraError}`);
+                continue;
+              }
+
+              if (issue.pull_request) {
+                missing.push(`#${c.num} (from ${c.how}) is a pull request, not an issue`);
+                continue;
+              }
+
+              core.setOutput('linked', 'true');
+              core.setOutput('reason', `issue #${c.num} [${issue.state}] "${issue.title}" via ${c.how}`);
+              return;
+            }
+
+            if (infraError) {
+              core.warning(
+                'Linked-issue gate DEGRADED: the issues API could not be reached, so the ' +
+                'reference was accepted without being verified. Re-run this job to check it ' +
+                'properly. Failing here instead would block every merge in the repo.'
+              );
+              core.setOutput('linked', 'true');
+              core.setOutput('reason', `UNVERIFIED — issues API unreachable (${infraError}); reference accepted so a transient outage cannot deadlock merges`);
+              return;
+            }
+
+            core.setOutput('reason', `Issue reference does not resolve: ${missing.join('; ')}`);
 
       - name: Comment on unlinked PR
         if: steps.check.outputs.linked == 'false' && steps.check.outputs.exempt != 'true'
@@ -112,6 +213,10 @@ jobs:
             1. **Branch name**: \`issue-<N>-description\` (recommended)
             2. **PR body**: Include \`Closes #N\`, \`Fixes #N\`, or \`Resolves #N\`
 
+            The number has to resolve to a real **issue in this repository** — a number that
+            does not exist, or that belongs to a pull request rather than an issue, does not
+            count as a link. The exact reason is in the check's log.
+
             Example:
             - Branch: \`issue-42-add-auth-check\`
             - Or add to PR body: \`Closes #42\`
@@ -125,10 +230,13 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          REASON: ${{ steps.check.outputs.reason }}
         run: |
           echo "PR #$PR_NUMBER is not linked to an issue"
           echo "Branch: $PR_BRANCH"
-          echo "Does not match issue-<N>-... pattern and PR body has no close/fix/resolve keyword"
+          echo "Reason: $REASON"
+          echo "Link it with a branch named issue-<N>-... or a 'Closes #N' line in the PR body,"
+          echo "where N is a real issue (not a pull request) in this repository."
           exit 1
 
       - name: Pass check if linked or exempt

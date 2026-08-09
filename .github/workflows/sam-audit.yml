@@ -44,6 +44,13 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # #295: the merge-ready ping reads the check rollup for the head SHA before claiming the PR
+      # is ready. `checks: read` covers check runs (every workflow here), `statuses: read` covers
+      # legacy commit statuses (external integrations). Drop either and that step loses the
+      # ability to see part of the rollup — in which case it must say so rather than round the
+      # missing half up to "passing", which is the entire defect being fixed.
+      checks: read
+      statuses: read
     # NO job-level `if:`. This is the crux of #228.
     #
     # The previous condition skipped the job for any event it did not recognise — a label that was
@@ -294,17 +301,119 @@ jobs:
               event: event,
             });
 
+      # #295: this step used to post a fixed sentence claiming both that tests were passing and
+      # that the PR was ready to merge, from a condition that read `steps.audit.outputs.status`
+      # and nothing else — no test check, no rollup. Observed live on PR #294: the ping appeared
+      # while the required check `PR must be linked to an issue` was RED.
+      #
+      # This never bypassed anything — `/merge` is hard-gated by tools/pr-guard.js in
+      # agent-dispatch.yml, which does read the checks — so the damage was to trust, not to the
+      # gate: a confident wrong "ready to merge" teaches people to stop reading the check list,
+      # which is the exact habit that let a dead workflow sit unnoticed for weeks (#275/#286).
+      #
+      # The step now reads the rollup and reports one of three states, and when it cannot read
+      # the rollup it says only what it actually knows. Sam's verdict covers the security audit;
+      # nothing here should imply more than that.
       - name: Post merge-ready ping (approved only)
         if: steps.audit.outputs.status == 'approved'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha;
+
+            // This job's own check run is IN PROGRESS right now — it is the thing posting the
+            // comment. Counting it would make every ping say "1 check still running" about
+            // itself, forever. GitHub names a check run after the job's `name:`, so this string
+            // must stay in step with the `name:` on the job above.
+            const SELF = 'Security Audit (Sam CSO)';
+
+            const approval = '✅ **Sam (CSO) approved** — the security audit passed.';
+            let body;
+
+            try {
+              const runs = await github.paginate(github.rest.checks.listForRef, {
+                owner, repo, ref: sha, per_page: 100,
+              });
+
+              // One SHA can carry several runs of the same check (re-runs, or a run cancelled by
+              // a `cancel-in-progress` concurrency group). Only the newest is the current
+              // verdict; without this, a superseded cancelled attempt reads as a live failure.
+              const current = new Map();
+              for (const r of runs) {
+                if (r.name === SELF) continue;
+                const prev = current.get(r.name);
+                if (!prev || r.id > prev.id) current.set(r.name, r);
+              }
+
+              const failing = [];
+              const pending = [];
+              for (const r of current.values()) {
+                if (r.status !== 'completed') { pending.push(r.name); continue; }
+                // `skipped` and `neutral` are deliberately NOT failures: GitHub counts both as
+                // satisfying a required check (the #228 finding), so calling them failures here
+                // would contradict the merge button and be wrong in the other direction.
+                if (['failure', 'timed_out', 'action_required', 'cancelled', 'stale'].includes(r.conclusion)) {
+                  failing.push(r.name);
+                }
+              }
+
+              // Legacy commit statuses are a separate list from check runs and are equally
+              // capable of blocking a merge, so a rollup that reads only check runs is the same
+              // partial-evidence mistake in a smaller shape.
+              const combined = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: sha });
+              for (const s of combined.data.statuses || []) {
+                if (s.state === 'failure' || s.state === 'error') failing.push(s.context);
+                else if (s.state === 'pending') pending.push(s.context);
+              }
+
+              const list = names => [...new Set(names)].map(n => `\`${n}\``).join(', ');
+
+              if (failing.length) {
+                body = [
+                  approval,
+                  '',
+                  `🚫 **Not ready to merge.** ${failing.length} other check(s) are not passing: ${list(failing)}.`,
+                  '',
+                  'Sam\'s approval covers the security audit only. `/merge` is gated on the full',
+                  'check list by `pr-guard.js` and will refuse until these are green.',
+                ].join('\n');
+              } else if (pending.length) {
+                body = [
+                  approval,
+                  '',
+                  `⏳ ${pending.length} other check(s) are still running: ${list(pending)}.`,
+                  '',
+                  'Not yet ready to merge — check back when the check list settles.',
+                ].join('\n');
+              } else {
+                body = [
+                  approval,
+                  '',
+                  `All other checks on \`${sha.slice(0, 7)}\` are passing (${current.size} check(s) read).`,
+                  '',
+                  '**Ready to merge** — reply `/merge` to proceed or `/close` to abandon.',
+                ].join('\n');
+              }
+            } catch (err) {
+              // Say only what this step established. The audit really did pass; the check list
+              // is simply unknown from here, and claiming it is green would be inventing the
+              // evidence this whole change exists to stop inventing.
+              core.warning(`Could not read the check rollup: ${err.message}`);
+              body = [
+                approval,
+                '',
+                `⚠️ Could not read the check rollup for this commit (${err.message}), so this`,
+                'comment says nothing about the other checks. Read the check list yourself before',
+                'merging — `/merge` will re-verify it and refuse if anything is red.',
+              ].join('\n');
+            }
+
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ github.event.pull_request.number }},
-              body: `✅ Sam approved. Tests passing. **Ready to merge** — reply \`/merge\` to proceed or \`/close\` to abandon.`
+              owner, repo, issue_number: prNumber, body,
             });
 
       - name: Fail check if blocked

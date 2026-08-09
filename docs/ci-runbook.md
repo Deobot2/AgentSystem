@@ -87,23 +87,56 @@ engineering reviewer.
 
 ## Required status checks on `main`
 
-`Node.js tests` and `Security Audit (Sam CSO)`. The latter needs the self-hosted runner,
-so with no usable runner every PR is unmergeable without an admin override — and an admin
-override merges without the security gate. Fix the runner rather than making a habit of
-`--admin`.
+`Node.js tests`, `Security Audit (Sam CSO)` and `PR must be linked to an issue`. The security
+audit needs the self-hosted runner, so with no usable runner every PR is unmergeable without an
+admin override — and an admin override merges without the security gate. Fix the runner rather
+than making a habit of `--admin`.
 
-## Linked-issue check (#275)
+## Linked-issue check (#275, #296)
 
-`pr-linked-issue-check.yml` runs on `ubuntu-latest` for every PR opened or synchronized against
-`main`. It requires each PR to reference an issue, checked in order:
+`pr-linked-issue-check.yml` runs on `ubuntu-latest` for every PR opened, synchronized, edited or
+(un)labelled against `main`, and is a **required status check** with `enforce_admins`. It
+collects candidate issue references from:
 
-- the branch name matches `issue-<N>-...`, or
-- the PR body contains a close/fix/resolve keyword plus `#N` (`closes #42`, `fixes #42`, etc.)
+- the branch name matching `issue-<N>-...`, and
+- close/fix/resolve keywords plus `#N` in the PR body (`closes #42`, `fixes #42`, …)
 
-PRs labelled `spec` are exempt (design/discussion, not merged code). An unlinked PR gets a
-one-time bot comment explaining how to link it, and the check fails (`exit 1`) until it is
-linked or labelled `spec`. It is not currently in the `Required status checks` list above —
-add it there if it should block merges rather than just flag them.
+Every candidate is then **resolved through the API** (`issues.get` against this repo). This is
+the part #296 added; before it, the check only pattern-matched strings, so `Closes #99999` and a
+branch named `issue-0-whatever` both passed a gate that was already required on `main`.
+
+| Case | Verdict | Why |
+|------|---------|-----|
+| number resolves to an issue here, open **or closed** | linked | the gate enforces that the work is tracked, not that the tracker is still open — issues legitimately close before their PR merges |
+| number resolves to a **pull request** | not linked | PRs share the issue numbering space and come back from the same endpoint; a PR is not a tracked work item, and `Closes #<pr>` is usually a typo for the PR's own number |
+| number does not exist (**404**) | not linked | the #296 case |
+| `#0`, or no reference at all | not linked | rejected before any API call |
+| any other API error — 403 rate limit, 5xx, 410, network | **linked, marked UNVERIFIED** | fail-open, deliberately: see below |
+| PR labelled `spec` | exempt | design/discussion, not merged code |
+
+**The fail-open is load-bearing.** This is a required check with `enforce_admins`, so failing
+closed on a transient API error blocks every merge in the repo at once with no non-admin way
+out and no code change that fixes it. A run that could not reach the issues API emits a
+`::warning` containing `DEGRADED` and a reason string starting `UNVERIFIED`, and passes. If you
+see that, re-run the job — the green check verified nothing.
+
+The `issues: read` permission on that job is what makes the resolution work. Drop it and every
+call errors into the fail-open path, i.e. the gate silently reverts to the syntax-only check
+#296 removed, staying green the whole time. `tests/pr_linked_issue_check.test.js` pins it.
+
+## "Ready to merge" ping (#295)
+
+The ping `sam-audit.yml` posts after an approving audit used to state that tests were passing
+and the PR was ready to merge, having read neither the test check nor the rollup — it fired on
+Sam's own verdict alone. On PR #294 it invited a human to `/merge` while a required check was
+red. `/merge` itself was never bypassable (`tools/pr-guard.js` gates it in `agent-dispatch.yml`
+and does read the checks), so the cost was trust: a confident wrong "ready to merge" trains
+people out of reading the check list.
+
+It now reads the check rollup for the head SHA — check runs plus legacy commit statuses,
+excluding its own in-progress run — and posts one of: ready to merge, N checks failing (named),
+N checks still running (named), or, if the rollup cannot be read, an explicit statement that it
+does not know. Sam's approval is reported as covering the security audit only.
 
 ## Workflow lint (#293)
 
