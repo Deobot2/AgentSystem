@@ -30,4 +30,4 @@ jobs:
       # Deliberately NOT running `deploy-hooks.js --check` here. ubuntu-latest has no
       # ~/.claude/settings.json and no installed hooks, so it could only ever pass vacuously --
       # the same green-build-hides-a-dead-thing failure as #275/#292. Real drift needs a host
-      # with hooks installed: the daily `enforcement-drift-check` job in scheduled-tasks.yml.
+      # with hooks installed: the daily `enforcement-drift-check` job in enforcement-drift-check.yml.

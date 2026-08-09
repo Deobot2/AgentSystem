@@ -21,12 +21,16 @@ Run after any `hooks/` change. Manifest is `HOOK_REGISTRY` in `tools/deploy-hook
 hooks there. Registration was once PowerShell-only, so on Linux the whole pipeline was
 installed-but-inert; `--check` is what stops that recurring.
 
+The daily automation is the `enforcement-drift-check` job, which lives in its own
+`.github/workflows/enforcement-drift-check.yml` — **not** in `scheduled-tasks.yml`, where it was
+gated behind a multi-cron `github.event.schedule` match and never once fired (#300).
+
 Registration used to be additive-only, so a hook deleted from the repo kept firing off an invisible
 registration (#302). `--check` now also reports **stale** entries — inside `~/.claude/hooks` but not
 in `HOOK_REGISTRY`, or pointing at a file that is gone — and deploy removes them, plus the orphan
 file when a stale registration of ours attributes it. Third-party registrations (plugin hooks under
 `~/.claude/plugins/**`) are matched by path prefix and never touched. The automation is the daily
-`enforcement-drift-check` job in `scheduled-tasks.yml` on the self-hosted runner; `test.yml` does
+`enforcement-drift-check` job in `enforcement-drift-check.yml` on the self-hosted runner; `test.yml` does
 **not** run `--check`, because a hosted runner has no install and would only pass vacuously.
 
 A completely bare `~/.claude` makes `--check` print `no-install` and exit 0 — pass

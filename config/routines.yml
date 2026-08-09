@@ -161,12 +161,13 @@
   description: Daily enforcement drift check (hooks, agents, routines) — alerts on mismatch
   trigger: schedule
   mechanism: cron
+  workflow_file: enforcement-drift-check.yml
   workflow_job: enforcement-drift-check
   schedule: "0 3 * * *"
   task_name: AgentSystem-EnforcementDriftCheck
   enforce: hard
   enabled: true
-  action: "Enforcement drift check runs daily (03:00 UTC). Three --check tools verify repo vs deployed state: `node tools/deploy-hooks.js --check` (hook deploy+registration), `node tools/sync-agents.js --check` (installed agent defs), `node tools/routines.js verify` (orphan hard cron routines). Raises `enforcement-drift` human-needed alert on any failure, resolves on success. See .github/workflows/scheduled-tasks.yml enforcement-drift-check job."
+  action: "Enforcement drift check runs daily (03:00 UTC). Three --check tools verify repo vs deployed state: `node tools/deploy-hooks.js --check` (hook deploy+registration), `node tools/sync-agents.js --check` (installed agent defs), `node tools/routines.js verify` (orphan hard cron routines). Raises `enforcement-drift` human-needed alert on any failure, resolves on success. See .github/workflows/enforcement-drift-check.yml."
 
 # ── Life OS daily cadence: two stages, one of which is not ours ────────────────────────────────
 #

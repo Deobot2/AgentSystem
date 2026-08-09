@@ -1,0 +1,121 @@
+# Enforcement Drift Check — isolated workflow to guarantee 03:00 UTC runs.
+#
+# This job lived in scheduled-tasks.yml gated on `github.event.schedule == '0 3 * * *'`
+# and demonstrably never fired — zero scheduled runs in the history (issue #300). Five
+# sibling jobs in that same file use the identical gating pattern and DO fire, so the
+# cause was NOT determinable from the available evidence; do not repeat the earlier
+# guess that multi-cron workflows mismatch `github.event.schedule`, which was asserted
+# and then retracted for lack of proof.
+#
+# Isolating it here with a single dedicated cron removes the variable entirely rather
+# than explaining it. If the 03:00 UTC run is still missing after this, the cause is
+# upstream of the gating expression and worth reopening #300 with run evidence.
+#
+# Raises enforcement-drift alert on any drift detected (hooks, agents, routines).
+# See config/routines.yml: enforcement-drift-check routine for details.
+
+name: Enforcement Drift Check
+
+on:
+  schedule:
+    # Daily drift check: 03:00 UTC. Verify repo vs deployed state.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  enforcement-drift-check:
+    # Daily enforcement drift check. Runs on self-hosted Linux runner only
+    # (cannot run on GitHub-hosted because it accesses ~/.claude and ~/agent-memory).
+    runs-on: [self-hosted, Linux]
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve gh/node absolute paths for runner service context
+        id: tools
+        shell: bash
+        run: |
+          resolve() {
+            local name="$1"; shift
+            local c
+            for c in "$@"; do [ -x "$c" ] && { echo "$c"; return; }; done
+            command -v "$name" 2>/dev/null || true
+          }
+          NODE_PATH=$(resolve node "$HOME/.nvm/versions/node/*/bin/node" /usr/bin/node /usr/local/bin/node)
+          echo "Resolved node: $NODE_PATH"
+          echo "node_path=$NODE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Run enforcement drift checks
+        id: drift
+        shell: bash
+        run: |
+          set +e
+          driftFound=0
+          results=""
+
+          echo "=== Checking hook deploy + registration drift ==="
+          # --require-install: this runner is supposed to HAVE hooks deployed, so a bare
+          # ~/.claude is the outage itself, not a clean skip. Without the flag the check
+          # no-ops to exit 0 on an empty home, which is the CI home a hosted runner has.
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/deploy-hooks.js" --check --require-install; then
+            echo "FAILED: Hook drift detected"
+            driftFound=1
+            results="${results}• Hook deploy/registration drift detected\n"
+          else
+            echo "PASSED: No hook drift"
+          fi
+
+          echo "=== Checking installed agent definition drift ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/sync-agents.js" --check; then
+            echo "FAILED: Agent drift detected"
+            driftFound=1
+            results="${results}• Agent definition drift detected\n"
+          else
+            echo "PASSED: No agent drift"
+          fi
+
+          echo "=== Checking for orphan hard cron routines ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/routines.js" verify; then
+            echo "FAILED: Routine verification failed"
+            driftFound=1
+            results="${results}• Cron routine verification failed (orphan routines or cron mismatch)\n"
+          else
+            echo "PASSED: All routines verified"
+          fi
+
+          echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
+          echo "drift_results=$(printf '%b' "$results")" >> "$GITHUB_OUTPUT"
+          exit "$driftFound"
+        continue-on-error: true
+
+      - name: Raise alert on drift detected
+        if: steps.drift.outputs.drift_found == '1'
+        shell: bash
+        run: |
+          "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" raise enforcement-drift \
+            --title "CI/CD enforcement drift detected" \
+            --why "Daily drift check on $(date -u +%Y-%m-%dT%H:%M:%SZ) found mismatches between repo and deployed state. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." \
+            --action "Run the three --check tools locally to diagnose:
+          \`\`\`bash
+          node tools/deploy-hooks.js --check
+          node tools/sync-agents.js --check
+          node tools/routines.js verify
+          \`\`\`
+
+          Then fix the drift and push. Common causes:
+          • Hooks edited in ~/.claude/hooks/ but not committed to repo or not deployed
+          • Agent defs edited in .agents/agents/ but sync-agents.js not run
+          • Cron routine added to config/routines.yml but corresponding job not added to workflow, or vice versa
+          • Hard cron routine marked enforce:hard but missing from workflow
+
+          Re-run this check after fixing to verify and close the alert." \
+            || echo "::warning::could not raise human-needed alert"
+          exit 1
+
+      - name: Resolve alert on clean drift check
+        if: steps.drift.outputs.drift_found == '0'
+        shell: bash
+        run: |
+          "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" resolve enforcement-drift \
+            || echo "::warning::could not resolve human-needed alert (no alert to resolve is OK)"
