@@ -78,6 +78,49 @@ Two things that are easy to get wrong:
 Append-only per-host logs (`session-log.jsonl`, `routing-log.jsonl`, `injection-*.jsonl`,
 `auto-capture.log`) are gitignored in the brain: they conflict on every sync and hold no facts.
 
+## Continuous sync (#341)
+
+`brain-sync.js` was correct and nothing ran it, so hosts only converged when a person remembered.
+Three triggers now do, all through one wrapper, `tools/brain-sync-run.js`:
+
+| Trigger | Memory | Code (this checkout) |
+|---|---|---|
+| SessionStart (`hooks/continuous-sync-hook.js --phase=start`) | `--pull-only` | `tools/repo-sync.js` — `git pull --ff-only` |
+| SessionEnd (`--phase=end`) | commit + push | never |
+| Host timer, ~15 min | commit + push | never |
+
+- **The timer is not a nicety.** It is the only trigger that reaches a host with no session ever
+  open — the Mission Control box, which writes memory from cron and drifted until a weekly job hit
+  ~250 conflicting nodes (#340). Install it: `bash tools/install-brain-sync-timer.sh` (systemd
+  `--user`, linger enabled) or `.\tools\install-brain-sync-timer.ps1` on Windows. `--check` runs in
+  the daily `enforcement-drift-check` job, because an un-installed timer fails silently by
+  construction.
+- **Code is pulled at SessionStart only**, never at end and never on the timer: rewriting the tree
+  under a running session means the model's picture of it silently stops matching. A dirty tree or
+  any branch other than `main` is skipped in silence, and nothing here ever pushes — PR plus Sam's
+  gate is unchanged.
+- **A memory conflict is never auto-resolved.** No `-X ours`, no retry with a different strategy.
+  `~/agent-memory` is user data in a private repo, so a strategy that picks a side is data loss with
+  a green exit code. brain-sync exit 1 becomes exit 3 here plus a `brain-sync-conflict`
+  human-needed alert; a later clean sync resolves it. (`graph.json` is the one exception and
+  `brain-sync.js` already handles it — take either side, rebuild from `nodes/`.)
+- The alert key is **per host** (`brain-sync-conflict-<hostname>`): one issue per machine, because
+  a conflict on the laptop and a conflict on the runner are two different people-tasks, and a
+  single shared key lets the second one resolve the first one's issue. Alert state lives in
+  `~/.cache/agentsystem/` (`%LOCALAPPDATA%\agentsystem` on Windows), not `tmpdir()` — a reboot
+  clearing the 20h de-duplication window turns a daily timer back into a daily issue comment.
+- A brain with committed conflict markers (`<<<<<<<`) in it is refused before the sync runs, since
+  syncing on top of them propagates them to every host. `--ignore-markers` is the escape hatch for
+  the person actually resolving them. The scan is repo-wide on purpose: scoping it to files git
+  reports as *unmerged* would see nothing in exactly the case that motivated it (#340), where the
+  markers were already committed.
+- Exit codes: `0` synced/skipped, `2` no brain checkout on this host (passed through, *not*
+  alerted, or a host that never cloned it would re-raise forever), `3` conflict alerted — hence
+  `SuccessExitStatus=0 3` in the unit.
+- Overlap is real: the timer can fire mid-`SessionEnd`. `tools/sync-lock.js` is a time-stale
+  lockfile in `tmpdir()` — deliberately **outside** the brain, since `brain-sync.js` runs
+  `git add -A` and would commit and push a lockfile to every host.
+
 ## Session Naming
 
 Sessions are named automatically at exit by `hooks/session-auto-rename-hook.js` (wired as the

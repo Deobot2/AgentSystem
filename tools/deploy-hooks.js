@@ -102,13 +102,18 @@ export function deploy(manifest = buildManifest()) {
 // Ported from sync_hooks_from_repo.ps1. `n(f)` = node hook, `b(f)` = bash hook;
 // both resolve to the deployed copy under ~/.claude/hooks.
 const HOOKS_DIR = join(CLAUDE_HOME, 'hooks').replaceAll('\\', '/');
-const n = f => `node "${HOOKS_DIR}/${f}"`;
+const n = (f, ...args) => `node "${HOOKS_DIR}/${f}"${args.length ? ` ${args.join(' ')}` : ''}`;
 const b = f => `bash "${HOOKS_DIR}/${f}"`;
 
 export const HOOK_REGISTRY = [
   { event: 'SessionStart',     command: n('memory-context-inject.js'),          timeout: 10, statusMessage: 'Loading memory context...' },
   { event: 'SessionStart',     command: n('routines-context-inject.js'),        timeout: 5,  statusMessage: 'Loading enforced routines...' },
   { event: 'SessionStart',     command: b('session-start.sh'),                  timeout: 10, statusMessage: 'Starting session...' },
+  // Continuous sync (#341). Two-phase like the auto-renamer: the hook spawns a detached worker and
+  // returns in ~80ms, so the 5s timeout is never the git fetch. Start pulls memory and fast-forwards
+  // the AgentSystem checkout; end commits and pushes memory. Code is never pulled at session end,
+  // and never on the host timer — files must not change under a running session.
+  { event: 'SessionStart',     command: n('continuous-sync-hook.js', '--phase=start'), timeout: 5, statusMessage: 'Syncing memory + code...' },
   { event: 'UserPromptSubmit', command: n('memory-router.js'),                  timeout: 5,  statusMessage: 'Routing...' },
   { event: 'UserPromptSubmit', command: b('user-prompt-submit.sh'),             timeout: 5,  statusMessage: 'Registering prompt...' },
   { event: 'SessionEnd',       command: n('memory-capture-hook.js'),            timeout: 5,  statusMessage: 'Capturing memory...' },
@@ -116,6 +121,7 @@ export const HOOK_REGISTRY = [
   // Third SessionEnd hook (see CLAUDE.md "Session Naming"). Two-phase: returns in
   // ~80ms after spawning a detached worker, so the 5s timeout is not the model call.
   { event: 'SessionEnd',       command: n('session-auto-rename-hook.js'),       timeout: 5,  statusMessage: 'Naming session...' },
+  { event: 'SessionEnd',       command: n('continuous-sync-hook.js', '--phase=end'), timeout: 5, statusMessage: 'Pushing memory...' },
   // routine-dispatch is Bash-scoped: its payload inspection only ever applies to
   // Bash events (see the 2026-07-12 audit notes in the retired .ps1).
   { event: 'PostToolUse',      command: b('wip-checkpoint.sh'),                 timeout: 5,  statusMessage: 'Saving checkpoint...',          matcher: 'Write|Edit|NotebookEdit' },

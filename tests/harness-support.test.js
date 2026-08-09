@@ -23,8 +23,14 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DOC = join(REPO, 'docs', 'harness-support.md');
 const doc = readFileSync(DOC, 'utf8');
 
-// `node "<dir>/foo.js"` / `bash "<dir>/foo.sh"` -> foo.js
-const hookFile = (cmd) => basename(cmd.replace(/"$/, ''));
+// `node "<dir>/foo.js"` / `bash "<dir>/foo.sh"` / `node "<dir>/foo.js" --phase=start` -> foo.js
+// Take the quoted script path, not the last token: a registry entry may pass arguments (that is how
+// one hook file serves two events), and matching on the tail turns the file name into
+// `foo.js" --phase=start`, which no doc will ever contain.
+const hookFile = (cmd) => {
+  const quoted = cmd.match(/"([^"]+)"/);
+  return basename(quoted ? quoted[1] : cmd);
+};
 
 // Rows of the support matrix, as { feature, claude, antigravity, reason }.
 function matrixRows() {

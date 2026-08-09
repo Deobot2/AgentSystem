@@ -84,6 +84,19 @@ jobs:
             echo "PASSED: All routines verified"
           fi
 
+          echo "=== Checking the memory sync timer on this host ==="
+          # This runner is the host with no interactive session on it, so the 15-minute timer is the
+          # ONLY thing keeping its ~/agent-memory in step — the SessionStart/SessionEnd hooks never
+          # fire here. An un-installed or stale timer is silent by construction: nothing fails, the
+          # brain just quietly stops converging, which is #340.
+          if ! bash "${{ github.workspace }}/tools/install-brain-sync-timer.sh" --check; then
+            echo "FAILED: brain-sync timer drift detected"
+            driftFound=1
+            results="${results}• Memory sync timer missing or stale (tools/install-brain-sync-timer.sh --check)\n"
+          else
+            echo "PASSED: brain-sync timer installed"
+          fi
+
           echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
           echo "drift_results=$(printf '%b' "$results")" >> "$GITHUB_OUTPUT"
           exit "$driftFound"
@@ -101,6 +114,7 @@ jobs:
           node tools/deploy-hooks.js --check
           node tools/sync-agents.js --check
           node tools/routines.js verify
+          bash tools/install-brain-sync-timer.sh --check
           \`\`\`
 
           Then fix the drift and push. Common causes:
@@ -108,6 +122,7 @@ jobs:
           • Agent defs edited in .agents/agents/ but sync-agents.js not run
           • Cron routine added to config/routines.yml but corresponding job not added to workflow, or vice versa
           • Hard cron routine marked enforce:hard but missing from workflow
+          • Memory sync timer never installed on this host, or pointing at a checkout that moved: \`bash tools/install-brain-sync-timer.sh\`
 
           Re-run this check after fixing to verify and close the alert." \
             || echo "::warning::could not raise human-needed alert"

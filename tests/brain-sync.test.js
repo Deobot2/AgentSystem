@@ -124,7 +124,11 @@ test('conflict in an authored node stops for a human and leaves the merge in pla
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test('--pull-only merges without pushing', () => {
+// This used to assert that --pull-only committed locally and held the commit back from the remote.
+// #341 made it stricter: --pull-only now runs at every SessionStart on every host, so committing is
+// not a smaller version of pushing — it is turning whatever is open in an editor into a permanent
+// commit that the next full sync pushes everywhere. --pull-only writes nothing.
+test('--pull-only merges without committing or pushing', () => {
   const { base, hosts: [a, b] } = makeWorld();
   try {
     fs.writeFileSync(path.join(b, 'nexus', 'personal-brain', 'nodes', 'from-b.md'), 'b\n');
@@ -136,8 +140,10 @@ test('--pull-only merges without pushing', () => {
     assert.match(r.out, /not pushing/);
     assert.ok(fs.existsSync(path.join(a, 'nexus', 'personal-brain', 'nodes', 'from-b.md')),
       'pull must still have happened');
-    assert.notEqual(git(a, ['rev-list', '--count', 'origin/main..HEAD']), '0',
-      'local commit must remain unpushed');
+    assert.equal(git(a, ['rev-list', '--count', 'origin/main..HEAD']), '0',
+      '--pull-only committed local work');
+    assert.match(git(a, ['status', '--porcelain']), /from-a\.md/,
+      'the local edit was swallowed instead of being left for the author');
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 

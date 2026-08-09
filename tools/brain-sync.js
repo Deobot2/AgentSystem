@@ -85,7 +85,14 @@ if (opt.status) {
 
 // ---------------------------------------------------------------------------- commit local work
 
-if (dirty) {
+// --pull-only means pull only, all the way down. This ran at SessionStart, where the promise to the
+// user is "bring this host up to date, write nothing" — but committing here made every session open
+// by staging `git add -A` and writing a commit, so an editor left mid-thought or a half-finished
+// merge became a permanent commit that the next non-pull-only run pushed everywhere. The pull below
+// can still fail on a dirty tree; that is the honest outcome, and it stops rather than committing.
+if (dirty && opt.pullOnly) {
+  log(`${dirty.split('\n').length} local change(s) left uncommitted (--pull-only)`);
+} else if (dirty) {
   git(['add', '-A']);
   // Host in the subject on purpose: when a conflict does show up, knowing which machine wrote
   // which side is the whole diagnosis.
@@ -104,6 +111,16 @@ const pull = git([...IDENT, 'pull', '--no-edit', '--no-rebase', 'origin', branch
 if (pull.code !== 0) {
   const conflicts = git(['diff', '--name-only', '--diff-filter=U'], { allowFail: true }).out
     .split('\n').filter(Boolean);
+
+  // A dirty tree under --pull-only is not a conflict. Since --pull-only no longer commits first, git
+  // refuses the merge outright when incoming changes touch a locally modified file — nothing is
+  // merged, nothing is broken, there is no unmerged path to resolve. Reporting that as "a human must
+  // resolve a merge" would open an issue at every session start on any host with unsaved memory
+  // edits. Say so and exit 0; the next full sync commits and pushes properly.
+  if (opt.pullOnly && dirty && !conflicts.length) {
+    log('pull skipped: local changes are uncommitted (--pull-only writes nothing)');
+    process.exit(0);
+  }
 
   // graph.json is a generated index, not authored content — it is rewritten whole on every graph
   // write, so a conflict there is guaranteed the moment two hosts think. Take our side and let the

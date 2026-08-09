@@ -70,6 +70,26 @@ test('every hook file under hooks/ that is meant to run is registered', () => {
     'session-auto-rename-hook.js must be a SessionEnd hook or it never runs');
 });
 
+// #341. One file, two events, and the phase is the only thing that distinguishes them — so the
+// registration is where this feature is right or wrong. Registering the start phase on SessionEnd
+// would fast-forward the code checkout as a session ends, and registering the end phase on
+// SessionStart would push memory the session has not written yet. Both look fine in a file listing.
+test('continuous sync is registered on both session events, with the right phase on each', () => {
+  const entries = HOOK_REGISTRY.filter(e => /continuous-sync-hook\.js/.test(e.command));
+  assert.equal(entries.length, 2, 'continuous sync needs exactly one SessionStart and one SessionEnd entry');
+
+  const start = entries.find(e => e.event === 'SessionStart');
+  const end = entries.find(e => e.event === 'SessionEnd');
+  assert.ok(start, 'no SessionStart entry — memory is never pulled and the checkout never fast-forwards');
+  assert.ok(end, 'no SessionEnd entry — whatever the session learned stays on this host');
+  assert.match(start.command, /--phase=start/);
+  assert.match(end.command, /--phase=end/);
+
+  // The hook is the fast half of a two-phase pair; the git work happens in a detached worker. A
+  // generous timeout here would mean someone moved the network calls back into the hook.
+  for (const e of entries) assert.ok(e.timeout <= 5, `timeout ${e.timeout}s is too long for a hook that only spawns`);
+});
+
 test('same command on two events registers under both', () => {
   const s = {};
   mergeHookSettings(s);
