@@ -157,10 +157,13 @@ jobs:
           }
           GH_PATH=$(resolve gh "$HOME/.local/bin/gh" /usr/local/bin/gh /usr/bin/gh)
           CLAUDE_PATH=$(resolve claude "$HOME/.local/bin/claude" /usr/local/bin/claude /usr/bin/claude)
+          NODE_PATH=$(resolve node "$HOME/.local/bin/node" /usr/local/bin/node /usr/bin/node)
           echo "Resolved gh: $GH_PATH"
           echo "Resolved claude: $CLAUDE_PATH"
+          echo "Resolved node: $NODE_PATH"
           echo "gh_path=$GH_PATH" >> "$GITHUB_OUTPUT"
           echo "claude_path=$CLAUDE_PATH" >> "$GITHUB_OUTPUT"
+          echo "node_path=$NODE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Get PR diff
         if: steps.precheck.outputs.skip != 'true'
@@ -255,16 +258,33 @@ jobs:
           # "CI Pre-Merge Audit Mode" emits the APPROVED:/BLOCKED: vocabulary parsed below.
           # Agent names are case-sensitive (registered as `Sam`). Prompt is piped via stdin
           # (`-p` with no positional arg) to avoid argv length/quoting limits with a large diff.
-          "$CLAUDE" --agent Sam --model sonnet --effort medium -p < "$TASK" > "$RESULT" 2>&1 || true
-          echo "claude done; result bytes: $(wc -c < "$RESULT")"
-          if grep -q '^APPROVED:' "$RESULT"; then
-            echo "status=approved" >> "$GITHUB_OUTPUT"
+          rc=0
+          "$CLAUDE" --agent Sam --model sonnet --effort medium -p < "$TASK" > "$RESULT" 2>&1 || rc=$?
+          echo "claude exit: $rc; result bytes: $(wc -c < "$RESULT")"
+          # THREE states, not two. Every non-approval path used to collapse into `blocked`, so a
+          # CLI spend-limit message, a network error or an empty result file got posted verbatim as
+          # Sam's security finding under a 🚫 REQUEST_CHANGES review — PRs #327/#328 sat
+          # "blocked for security" with nothing ever audited. `blocked` now requires the real
+          # BLOCKED: marker; anything else is `error`. Both still fail the check (fail-closed is
+          # correct); only the story they tell changes.
+          if [ "$rc" -ne 0 ]; then
+            status=error
+          elif [ ! -s "$RESULT" ]; then
+            status=error
+          elif grep -q '^APPROVED:' "$RESULT"; then
+            status=approved
+          elif grep -q '^BLOCKED:' "$RESULT"; then
+            status=blocked
           else
-            echo "status=blocked" >> "$GITHUB_OUTPUT"
+            status=error
           fi
+          echo "verdict: $status"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Post Sam review to PR
+        id: review
         if: steps.precheck.outputs.skip != 'true'
         uses: actions/github-script@v7
         env:
@@ -273,7 +293,16 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const status = '${{ steps.audit.outputs.status }}';
+            // `continue-on-error: true` on the audit step means a step that dies before writing its
+            // outputs still lets this one run, with `status` empty. Treat outcome==failure and any
+            // unrecognised value as `error` — never let an unset output fall through to the
+            // "Sam blocked this PR" wording.
+            const raw = '${{ steps.audit.outputs.status }}';
+            const outcome = '${{ steps.audit.outcome }}';
+            const status = (outcome !== 'failure' && (raw === 'approved' || raw === 'blocked'))
+              ? raw
+              : 'error';
+            core.setOutput('status', status);
             let result = '';
             try {
               result = fs.readFileSync(process.env.RUNNER_TEMP + '/sam-result.txt', 'utf8');
@@ -281,6 +310,24 @@ jobs:
               result = 'Error reading Sam audit output: ' + e.message;
             }
             if (result.length > 60000) result = result.slice(0, 60000) + '\n\n...(truncated)';
+
+            // An audit that could not run is an infrastructure outage, not a security finding.
+            // Posting it as a REQUEST_CHANGES review says "Sam demands changes" about a spend
+            // limit or a dead network — the same lie, relocated. Plain comment, distinct wording,
+            // no 🚫. The check still fails (see the step below); only the story changes.
+            if (status === 'error') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ github.event.pull_request.number }},
+                body: `⚠️ **Sam (CSO) — Audit could not run**\n\n`
+                  + `The security audit did not produce a verdict, so this PR is **unaudited** — `
+                  + `not blocked on a finding. The check fails closed until the audit can run again.\n\n`
+                  + `claude CLI exit code: \`${{ steps.audit.outputs.exit_code }}\`\n\n`
+                  + `<details><summary>Captured output</summary>\n\n\`\`\`\n${result}\n\`\`\`\n\n</details>`,
+              });
+              return;
+            }
 
             const emoji = status === 'approved' ? '✅' : '🚫';
             // GitHub hard-blocks the built-in GITHUB_TOKEN from submitting an APPROVE review
@@ -315,7 +362,7 @@ jobs:
       # the rollup it says only what it actually knows. Sam's verdict covers the security audit;
       # nothing here should imply more than that.
       - name: Post merge-ready ping (approved only)
-        if: steps.audit.outputs.status == 'approved'
+        if: steps.review.outputs.status == 'approved'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -417,7 +464,39 @@ jobs:
             });
 
       - name: Fail check if blocked
-        if: steps.audit.outputs.status == 'blocked'
+        if: steps.review.outputs.status == 'blocked'
         run: |
           echo "Sam blocked this PR. See review for details."
           exit 1
+
+      # Fail-closed, same as `blocked` — an audit that could not run must never let a PR through.
+      # The difference is only that it says so honestly, and pages a human, because nothing on this
+      # runner can fix a spend limit or a dead CLI.
+      - name: Fail check and alert if the audit could not run
+        if: steps.review.outputs.status == 'error'
+        shell: bash
+        # GH_TOKEN deliberately unset: human-needed.js needs issue-write, and the job's
+        # GITHUB_TOKEN has none. Leaving it unset lets `gh` fall through to the runner's own
+        # hosts.yml PAT (same #gh-token-shadow reasoning as scheduled-tasks.yml).
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          NODE="${{ steps.tools.outputs.node_path }}"
+          "$NODE" "${{ github.workspace }}/tools/human-needed.js" raise sam-audit-cannot-run \
+            --title "Sam pre-merge audit cannot run" \
+            --why "\`sam-audit.yml\` could not produce a verdict on PR #${{ github.event.pull_request.number }} (claude CLI exit \`${{ steps.audit.outputs.exit_code }}\`). Every PR to \`main\` is unmergeable until this clears — the required check fails closed. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." \
+            --action "Open the run log and read the captured claude output. Usual causes: Anthropic spend limit reached (raise it, or wait for the monthly reset), the \`claude\` CLI missing from the self-hosted runner's service PATH, or no network. Re-run the workflow from the Actions UI once fixed; a passing audit is what closes this alert." \
+            || echo "::warning::could not raise the sam-audit-cannot-run alert"
+          echo "Sam's audit could not run — failing closed. This PR is UNAUDITED, not blocked on a finding."
+          exit 1
+
+      - name: Clear the cannot-run alert once an audit completes
+        if: steps.review.outputs.status == 'approved' || steps.review.outputs.status == 'blocked'
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" \
+            resolve sam-audit-cannot-run \
+            --comment "Sam produced a real verdict on PR #${{ github.event.pull_request.number }} — the audit path works again." \
+            || echo "::warning::could not resolve the sam-audit-cannot-run alert"
