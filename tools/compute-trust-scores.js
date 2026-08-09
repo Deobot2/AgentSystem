@@ -3,14 +3,17 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 
+import { agentMemoryRoot } from './graph/graph-lib.js';
 import { parseFlagsOrExit } from './cli-args.js';
 import { isMainModule } from './is-main.js';
 
-const USAGE = 'Usage: node tools/compute-trust-scores.js [--dry-run] [--help]';
-const RUN_LOG_DIR = path.join(os.homedir(), 'agent-memory', 'nexus', 'run-log');
-const OUTPUT_FILE = path.join(os.homedir(), 'agent-memory', 'nexus', 'trust-scores.md');
+const USAGE = 'Usage: node tools/compute-trust-scores.js [--dry-run] [--allow-empty] [--help]';
+
+// Resolved per call, not at import: AGENT_MEMORY_ROOT is how tests point this at a temp dir, and a
+// module-level os.homedir() constant made that impossible to exercise.
+const runLogDir = () => path.join(agentMemoryRoot(), 'nexus', 'run-log');
+const outputFile = () => path.join(agentMemoryRoot(), 'nexus', 'trust-scores.md');
 
 function classifyResult(result, verification) {
   if (!result || typeof result !== 'string') return 'unknown';
@@ -26,23 +29,42 @@ function classifyResult(result, verification) {
   return 'unknown';
 }
 
-function main(dryRun = false) {
+// No input is a broken pipeline, not an empty result. This tool used to print a friendly line and
+// exit 0 in that case, so `weekly-trust-scores` was green every week while the report on disk sat
+// at 159 bytes of "No run data yet." since 2026-07-05 -- and hooks/memory-router.js routes on that
+// file. Missing input now exits 1. --allow-empty is the deliberate first-run bootstrap escape
+// hatch, and even then an existing report is never clobbered with a stub.
+function missingInput(reason, { dryRun, allowEmpty }) {
+  const OUTPUT_FILE = outputFile();
+  if (!allowEmpty) {
+    console.error(`[trust-scores] ${reason} — refusing to overwrite ${OUTPUT_FILE} with an empty report.`);
+    console.error('[trust-scores] Run logs are written by agent-dispatch.yml into ' + runLogDir() + '.');
+    console.error('[trust-scores] If this host has genuinely never dispatched an agent, pass --allow-empty.');
+    process.exit(1);
+  }
+  if (fs.existsSync(OUTPUT_FILE)) {
+    console.error(`[trust-scores] ${reason}, but ${OUTPUT_FILE} already exists — refusing to replace real data with a stub.`);
+    process.exit(1);
+  }
+  console.log(`[trust-scores] ${reason} — writing empty report (--allow-empty)`);
+  if (dryRun) console.log('[dry-run] would write empty report to', OUTPUT_FILE);
+  else writeEmpty();
+}
+
+function main(dryRun = false, allowEmpty = false) {
+  const RUN_LOG_DIR = runLogDir();
+  const OUTPUT_FILE = outputFile();
   console.log('[trust-scores] Reading run-log from:', RUN_LOG_DIR);
 
-  // Fail-soft: missing dir
   if (!fs.existsSync(RUN_LOG_DIR)) {
-    console.log('[trust-scores] Run-log directory does not exist — writing empty report');
-    if (dryRun) console.log('[dry-run] would write empty report to', OUTPUT_FILE);
-    else writeEmpty();
+    missingInput('Run-log directory does not exist', { dryRun, allowEmpty });
     return;
   }
 
   const files = fs.readdirSync(RUN_LOG_DIR).filter(f => f.endsWith('.json'));
 
   if (files.length === 0) {
-    console.log('[trust-scores] No run log files found — writing empty report');
-    if (dryRun) console.log('[dry-run] would write empty report to', OUTPUT_FILE);
-    else writeEmpty();
+    missingInput('No run log files found', { dryRun, allowEmpty });
     return;
   }
 
@@ -107,6 +129,7 @@ ${rows}`;
 }
 
 function writeEmpty() {
+  const OUTPUT_FILE = outputFile();
   const now = new Date().toISOString();
   const md = `# Agent Trust Scores
 _Last updated: ${now}_
@@ -124,6 +147,6 @@ No run data yet. Run logs are written to \`~/agent-memory/nexus/run-log/\` by ag
 const isMain = isMainModule(import.meta.url);
 
 if (isMain) {
-  const flags = parseFlagsOrExit(process.argv.slice(2), { usage: USAGE, allowed: ['dry-run'] });
-  main(!!flags['dry-run']);
+  const flags = parseFlagsOrExit(process.argv.slice(2), { usage: USAGE, allowed: ['dry-run', 'allow-empty'] });
+  main(!!flags['dry-run'], !!flags['allow-empty']);
 }

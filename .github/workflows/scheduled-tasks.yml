@@ -46,6 +46,18 @@ on:
         options:
           - daily-triage
           - weekly-agent-review
+          # A job that can only fire on its cron cannot be proven to work — the lesson
+          # enforcement-drift-check already learned for itself. weekly-memory-decay had never once
+          # executed its decay pass and weekly-trust-scores had been reporting success while writing
+          # nothing off-disk, and neither could be exercised on demand to find that out.
+          #
+          # enforcement-drift-check is deliberately NOT listed: #326 moved it out of this workflow
+          # into .github/workflows/enforcement-drift-check.yml, where it has its own
+          # workflow_dispatch. Listing it here would offer a choice that dispatches nothing.
+          - weekly-memory-decay
+          - weekly-trust-scores
+          - weekly-hygiene
+          - weekly-brain-consolidation
 
 jobs:
   # Life OS daily triage — STAGE 2 of the daily cadence.
@@ -128,19 +140,38 @@ jobs:
       # With coverage real, a chat outage should report as a gap rather than an accepted note.
       LIFE_OS_EXPECT_BEEPER: ${{ vars.LIFE_OS_EXPECT_BEEPER || '' }}
     steps:
-      # No checkout: daily-triage is one of the private life-OS skills gitignored by #187, so it
-      # exists only in this host's working copy — a fresh checkout would NOT contain it.
+      # The skill itself is NOT in this checkout — daily-triage is one of the private life-OS
+      # skills gitignored by #187, so it lives only in this host's ~/.claude/skills and is
+      # referenced by name below, never by path. The checkout is here for the other half of what
+      # $REPO is used for: tools/life-os-doctor.js, tools/human-needed.js and
+      # config/daily-triage-permissions.json, all of which ARE tracked.
       #
-      # REPO is resolved rather than hardcoded to $HOME/dev/AgentSystem: that symlink is an
-      # invariant this repo asserts in several places but nothing creates or verifies, and when it
-      # was absent the job died here every morning for days with no alert anywhere. Fall back to
-      # the real checkout so a missing symlink degrades to a warning instead of an outage.
+      # persist-credentials: false is load-bearing, not tidiness. The default wires the job's
+      # GITHUB_TOKEN into this checkout's git config as an `extraheader` credential, and that bot
+      # identity has push:false on this repo — the #gh-token-shadow story below, but for git rather
+      # than gh. With it off, git falls through to the host's own credential helper (the same
+      # repo-scoped PAT gh uses), so the skill's draft-PR pushes keep working.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # REPO is resolved rather than hardcoded because $HOME/dev/AgentSystem is an invariant this
+      # repo asserts in several places but nothing creates or verifies. The failure mode was not
+      # theoretical: the runner *service* runs as a user whose $HOME is /home/basely, where neither
+      # candidate exists, so this step hard-exited every single morning and Life OS stage 2 was
+      # down for a week.
+      #
+      # $GITHUB_WORKSPACE is the last candidate and it always exists (the checkout above guarantees
+      # it), so this step can no longer fail. That is the point: the host directories are a
+      # preference, not a dependency. They stay FIRST because the host copy is the one
+      # config/routines.yml and the installed hooks invoke, and it carries full git history that a
+      # workspace checkout does not.
       - name: Resolve the working copy
         id: repo
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem"; do
+          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem" "$GITHUB_WORKSPACE"; do
             if [ -d "$candidate/tools" ]; then
               echo "repo=$candidate" >> "$GITHUB_OUTPUT"
               echo "Using $candidate"
@@ -149,7 +180,7 @@ jobs:
               exit 0
             fi
           done
-          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem or $HOME/AgentSystem."
+          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem, $HOME/AgentSystem or $GITHUB_WORKSPACE — the checkout step must have failed."
           exit 1
 
       # Preflight before the model call, not inside it: every precondition is host state only a
@@ -350,7 +381,7 @@ jobs:
 
   # memory-maintenance.js operates on the local ~/agent-memory brain — local machine state.
   weekly-brain-consolidation:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 8 * * 1'
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-brain-consolidation')
     runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
@@ -360,21 +391,80 @@ jobs:
           node "${{ github.workspace }}/tools/memory-maintenance.js" --reflect
 
   # memory-decay.js reads/writes ~/agent-memory/nexus/* brains directly — local machine state.
+  #
+  # This job had never once run a decay pass. It failed every week with `graph.json not found at
+  # /home/basely/agent-memory/nexus/agentsystem/graph.json`, and the cause was not a missing file:
+  # `agentsystem` is not a brain slug under ~/agent-memory at all. Repo brains live at
+  # `<repo>/nexus/<slug>/` (graph-init.js's default) and are gitignored; only `personal-brain` and
+  # `agent-brain/<agent>` live under ~/agent-memory/nexus/. So `--brain=agentsystem` named a path
+  # that by design never exists, on any host, ever — and d82539c's "treat a missing graph as a
+  # skip" turned that from a weekly red run into a weekly silent no-op, which is worse.
+  #
+  # `--all` therefore replaces the hardcoded pair: it discovers the brains that actually exist and
+  # decays each, and exits nonzero if it finds none. The one thing this job must never do again is
+  # report success without pruning anything.
   weekly-memory-decay:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-memory-decay')
     runs-on: [self-hosted, Linux]
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: memory-decay-down
     steps:
       - uses: actions/checkout@v4
-      - name: Memory decay
+      - name: Memory decay (every brain under ~/agent-memory/nexus)
         shell: bash
         run: |
-          node "${{ github.workspace }}/tools/memory-decay.js" --brain=agentsystem
-          node "${{ github.workspace }}/tools/memory-decay.js" --brain=personal-brain
+          node "${{ github.workspace }}/tools/memory-decay.js" --all
+
+      # The decayed graphs are only on this runner's disk until they are pushed. Same reasoning as
+      # the trust-scores push below; brain-sync.js is the one supported way to write to the brain
+      # repo (see its header for why git rather than a synced drive, and how it resolves the
+      # generated-graph.json conflict without hand-merging).
+      - name: Push the decayed brain
+        shell: bash
+        run: node "${{ github.workspace }}/tools/brain-sync.js"
+
+      - name: Clear the human-needed alert
+        if: success()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/tools/human-needed.js" resolve "$ALERT_KEY" \
+            --comment "Weekly memory decay completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ)." \
+            || echo "::warning::could not clear the human-needed alert"
+
+      - name: Raise the human-needed alert (run failed)
+        if: failure()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/tools/human-needed.js" raise "$ALERT_KEY" \
+            --title "[CI]: the weekly memory decay is failing" \
+            --why "The Sunday decay pass failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Note this job spent months reporting nothing at all, so a failure here is the alerting working, not a regression." \
+            --action "Read the run log. \`no brains found\` means ~/agent-memory/nexus/ has no brain with a graph.json — run \`node tools/bootstrap-repo.js --all ~/dev\` on \`$(hostname)\` to initialise personal-brain and agent-brain. A push failure means the ~/agent-memory checkout needs attention: \`node tools/brain-sync.js --status\`. Re-run with \`gh workflow run scheduled-tasks.yml -f job=weekly-memory-decay\`; this issue closes itself on the next successful run." \
+            || echo "::warning::could not raise the human-needed alert"
 
   # compute-trust-scores.js reads ~/agent-memory/nexus/run-log/* — local machine state.
+  #
+  # This job reported success every week while achieving nothing, in two independent ways:
+  #
+  #  1. compute-trust-scores.js printed "Run-log directory does not exist — writing empty report"
+  #     and exited 0, overwriting whatever was there with a stub. It now refuses to clobber a real
+  #     report with an empty one and exits nonzero instead (--allow-empty is the deliberate
+  #     first-run bootstrap escape hatch).
+  #  2. There was no commit or push, so everything it wrote stopped at the runner's disk. The
+  #     measured result: ~/agent-memory/nexus/trust-scores.md sat at 159 bytes, mtime 2026-07-05,
+  #     reading "No run data yet." — while hooks/memory-router.js routed on that stub.
   weekly-trust-scores:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-trust-scores')
     runs-on: [self-hosted, Linux]
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: trust-scores-down
     steps:
       - uses: actions/checkout@v4
       - name: Compute trust scores
@@ -385,6 +475,7 @@ jobs:
       - name: Append routing accuracy to trust-scores.md
         shell: bash
         run: |
+          set -euo pipefail
           report=$(node "${{ github.workspace }}/tools/routing-report.js")
           target="$HOME/agent-memory/nexus/trust-scores.md"
           {
@@ -392,10 +483,37 @@ jobs:
             printf '%s\n' "$report"
           } >> "$target"
 
+      # Without this the whole job was a no-op with a green tick. brain-sync.js rather than a
+      # hand-rolled add/commit/push: the brain repo is PRIVATE and stays private (it pushes to the
+      # brain's own origin, never this one), and graph.json there is generated, so a naive merge
+      # would hand-resolve a file that is supposed to be rebuilt from nodes/. brain-sync.js is the
+      # documented tool for both and already handles the graph.json conflict correctly.
+      - name: Push trust scores into the brain repo
+        shell: bash
+        run: node "${{ github.workspace }}/tools/brain-sync.js"
+
+      - name: Clear the human-needed alert
+        if: success()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/tools/human-needed.js" resolve "$ALERT_KEY" \
+            --comment "Weekly trust scores computed and pushed at $(date -u +%Y-%m-%dT%H:%M:%SZ)." \
+            || echo "::warning::could not clear the human-needed alert"
+
+      - name: Raise the human-needed alert (run failed)
+        if: failure()
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/tools/human-needed.js" raise "$ALERT_KEY" \
+            --title "[CI]: the weekly trust-score computation is failing" \
+            --why "The Sunday trust-score job failed on \`$(hostname)\`. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). This job previously reported success while writing nothing, so a failure here is the check working." \
+            --action "Read the run log. \`no run-log data\` means ~/agent-memory/nexus/run-log/ is missing or empty — agent-dispatch.yml writes it, so check whether any agent has been dispatched on this host; pass --allow-empty only if a genuinely empty report is correct. A push failure means the ~/agent-memory checkout needs attention: \`node tools/brain-sync.js --status\`. Re-run with \`gh workflow run scheduled-tasks.yml -f job=weekly-trust-scores\`; this issue closes itself on the next successful run." \
+            || echo "::warning::could not raise the human-needed alert"
+
   # Operates on ~/.claude and ~/agent-memory directly (rotate-logs, claude-json-hygiene,
   # caveman-cache-fix, deploy-hooks --check) — none of these paths exist on a hosted runner.
   weekly-hygiene:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-hygiene')
     runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v4
@@ -447,12 +565,24 @@ jobs:
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: weekly-agent-review-down
     steps:
+      # Same reasoning as daily-triage's checkout, including persist-credentials: false — see the
+      # comment there. fetch-depth: 0 because the review prompt below reads "the last week of git
+      # log on main", which a shallow checkout does not have.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # $GITHUB_WORKSPACE last, and it always exists, so this step cannot fail — see the daily-triage
+      # resolver for why the host paths are a preference rather than a dependency. This job's very
+      # first execution (run 31303915585) died downstream of the old two-candidate loop with
+      # `Settings file not found: /home/basely/dev/AgentSystem/config/weekly-agent-review-permissions.json`.
       - name: Resolve the working copy
         id: repo
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem"; do
+          for candidate in "$HOME/dev/AgentSystem" "$HOME/AgentSystem" "$GITHUB_WORKSPACE"; do
             if [ -d "$candidate/tools" ]; then
               echo "repo=$candidate" >> "$GITHUB_OUTPUT"
               echo "Using $candidate"
@@ -461,7 +591,7 @@ jobs:
               exit 0
             fi
           done
-          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem or $HOME/AgentSystem."
+          echo "::error::No AgentSystem working copy found at $HOME/dev/AgentSystem, $HOME/AgentSystem or $GITHUB_WORKSPACE — the checkout step must have failed."
           exit 1
 
       # The deterministic numbers run first and print into the log unconditionally, so a failed or

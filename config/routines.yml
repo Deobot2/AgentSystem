@@ -133,7 +133,7 @@
   action: "Weekly brain review: run node ~/dev/AgentSystem/tools/memory-maintenance.js --reflect — full sleep cycle (split/reconsolidate/decay/stale-prune/consolidate/seed + reflection). Supersedes the old personal-brain-split.js + memory-stale.js two-step, which memory-maintenance.js now wraps."
 
 - id: weekly-memory-decay
-  description: Sunday visit_count decay across personal-brain and agentsystem graphs
+  description: Sunday visit_count decay across every initialised brain
   trigger: schedule
   mechanism: cron
   workflow_job: weekly-memory-decay
@@ -141,7 +141,7 @@
   task_name: AgentSystem-WeeklyMemoryDecay
   enforce: hard
   enabled: true
-  action: "Weekly memory decay: node ~/dev/AgentSystem/tools/memory-decay.js --brain=agentsystem then --brain=personal-brain. Keeps BM25 retrieval weights fresh by decaying stale visit counts."
+  action: "Weekly memory decay: node ~/dev/AgentSystem/tools/memory-decay.js --all. Decays stale visit counts in every brain under ~/agent-memory/nexus/. Not --brain=agentsystem: repo brains live in the repo, so that slug never existed and the pass was a silent no-op."
 
 - id: weekly-trust-scores
   description: Sunday trust-score aggregation from agent-dispatch run logs
