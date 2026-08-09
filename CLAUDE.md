@@ -266,6 +266,24 @@ enabled, pointing at a checkout that moved, and `gh` unauthenticated all surface
 "heartbeat missing or stale" line. The daily job now prints `--check` as a diagnostic under that
 failure. It is diagnostic only — the heartbeat stays the arbiter, since a green `--check` with no
 heartbeat is still an outage.
+**A hard-won instance of that (#362).** The daily job reported no heartbeat while
+`install-actions-watchdog.sh --check` reported every unit in sync, and both were telling the truth.
+`runner-maintenance.yml -f mode=status` showed the service had run hourly all day with
+`Result=success`, `ExecMainStatus=0`, `gh` authenticated — and no heartbeat file anywhere under
+`nexus/`. The unit was fine; the **code it executed** was not. `ExecStart` points at the canonical
+checkout `$HOME/dev/AgentSystem`, and that checkout was parked on the long-merged branch
+`issue-348-brain-sync-merge-guard`, cut before `b228331` (#355) added `writeHeartbeat` at all
+(`git show 7eacfa6:tools/actions-watchdog.js | grep -c writeHeartbeat` → `0`). So every run
+succeeded honestly and stamped nothing. `repair-install`'s canon heal (#360) switched canon back to
+`main`, the next hourly fire stamped a heartbeat, and the drift check went green.
+
+Two rules fall out of it. **A unit that points at a working tree inherits that tree's git state** —
+verifying the unit file verifies the path, never the revision behind it, so canon heal and watchdog
+install belong in the same repair pass. And **"the process ran and exited 0" is not "the feature
+ran"**: a heartbeat can only attest to code that knows how to write one, which is why the #362
+diagnostics report the timer, the last exit status, the journal, the resolved path *and* the file,
+rather than any one of them.
+
 Exit 3 means "outage detected, alert raised" — the unit declares `SuccessExitStatus=0 3` so
 systemd does not read a working watchdog as a failed one. Alerting still goes through GitHub
 Issues, which is unaffected by `actions/permissions.enabled = false`.
