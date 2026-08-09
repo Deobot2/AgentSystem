@@ -97,6 +97,18 @@ jobs:
             echo "PASSED: brain-sync timer installed"
           fi
 
+          echo "=== Checking actions-watchdog heartbeat freshness (#313) ==="
+          # The watchdog cannot report its own staleness (a dead timer runs no code), so this
+          # assertion lives here instead — a separate schedule that does not depend on the
+          # watchdog having fired at all.
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/actions-watchdog.js" --check-heartbeat; then
+            echo "FAILED: actions-watchdog heartbeat is missing or stale"
+            driftFound=1
+            results="${results}• actions-watchdog heartbeat missing or stale — the hourly timer may be dead (tools/actions-watchdog.js --check-heartbeat)\n"
+          else
+            echo "PASSED: actions-watchdog heartbeat is fresh"
+          fi
+
           echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
 
           # $results holds literal `\n` appended above; printf '%b' expands it into a genuinely

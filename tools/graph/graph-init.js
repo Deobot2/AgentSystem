@@ -29,8 +29,30 @@ for (const a of rawArgs) {
 }
 
 const [slug, repoPathArg] = positional;
-const repoPath = resolve(repoPathArg || process.cwd());
+const repoPath = resolve(expandTilde(repoPathArg) || process.cwd());
 if (!slug) { console.error('Usage: graph-init.js <project-slug> [repo-path] [--brain-path=PATH]'); process.exit(1); }
+
+// #346: a positional repo-path that is actually a BRAIN directory (personal-brain,
+// agent-brain/<agent>) silently scaffolds a nested nexus/<slug>/ inside the brain instead of
+// touching it — 40 stray nodes were reported as "graph-init: 40 nodes, 0 edges" while the real
+// 302-node/123-edge brain sat untouched. Detect it two ways: it already holds a graph.json, or
+// its own path ends in nexus/<slug> (the brain-path convention). Refuse rather than scaffold.
+function looksLikeBrainDir(p) {
+  if (existsSync(join(p, 'graph.json'))) return true;
+  const parts = p.split(/[\\/]+/).filter(Boolean);
+  const nexusIdx = parts.lastIndexOf('nexus');
+  return nexusIdx !== -1 && nexusIdx === parts.length - 2;
+}
+
+if (repoPathArg && looksLikeBrainDir(repoPath)) {
+  console.error(
+    `graph-init: refusing — "${repoPathArg}" resolves to ${repoPath}, which looks like a brain\n` +
+    `directory (holds graph.json, or its path ends in nexus/<slug>), not a repo root.\n` +
+    `Use --brain-path="${repoPathArg}" instead:\n` +
+    `  node tools/graph/graph-init.js ${slug} --brain-path="${repoPathArg}"`
+  );
+  process.exit(1);
+}
 
 const nexusDir = flags['brain-path']
   ? resolve(expandTilde(flags['brain-path']))
@@ -248,4 +270,4 @@ writeFileSync(
   'utf8'
 );
 
-console.log(`graph-init: ${graph.nodes.length} nodes, ${graph.edges.length} edges → nexus/${slug}/`);
+console.log(`graph-init: ${graph.nodes.length} nodes, ${graph.edges.length} edges → ${nexusDir}`);

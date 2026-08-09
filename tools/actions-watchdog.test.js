@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, DEFAULT_MAX_AGE_HOURS } from './actions-watchdog.js';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  decide, DEFAULT_MAX_AGE_HOURS,
+  heartbeatPath, writeHeartbeat, readHeartbeat,
+  decideHeartbeatFreshness, DEFAULT_HEARTBEAT_MAX_AGE_HOURS,
+} from './actions-watchdog.js';
 
 const NOW = new Date('2026-08-06T12:00:00Z');
 const hoursAgo = (h) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
@@ -37,4 +44,80 @@ test('down when there are no runs at all', () => {
 test('down on an unparseable run timestamp rather than silently healthy', () => {
   const v = decide({ enabled: true, newestRunAt: 'not-a-date', now: NOW });
   assert.equal(v.down, true);
+});
+
+// ---------------------------------------------------------------------- heartbeat (#313)
+//
+// All of these pass an explicit `path`/`root` override so nothing here ever touches the real
+// ~/agent-memory checkout.
+
+test('writeHeartbeat / readHeartbeat round trip', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'actions-watchdog-hb-'));
+  try {
+    const path = join(dir, 'heartbeat.json');
+    const written = writeHeartbeat({ verdict: 'healthy', ageHours: 2.5, path, now: NOW });
+    assert.equal(written.verdict, 'healthy');
+    const read = readHeartbeat(path);
+    assert.deepEqual(read, written);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readHeartbeat returns null when the file is missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'actions-watchdog-hb-'));
+  try {
+    const path = join(dir, 'nope.json');
+    assert.equal(existsSync(path), false);
+    assert.equal(readHeartbeat(path), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('per-host isolation: writing host-b heartbeat never touches host-a file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'actions-watchdog-hb-'));
+  try {
+    const pathA = heartbeatPath('host-a', dir);
+    const pathB = heartbeatPath('host-b', dir);
+    assert.notEqual(pathA, pathB);
+    writeHeartbeat({ verdict: 'healthy', host: 'host-a', path: pathA, now: NOW });
+    assert.equal(existsSync(pathB), false);
+    writeHeartbeat({ verdict: 'down', host: 'host-b', path: pathB, now: NOW });
+    const a = readHeartbeat(pathA);
+    const b = readHeartbeat(pathB);
+    assert.equal(a.host, 'host-a');
+    assert.equal(a.verdict, 'healthy');
+    assert.equal(b.host, 'host-b');
+    assert.equal(b.verdict, 'down');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('freshness: stale when heartbeat is null (never ran)', () => {
+  const v = decideHeartbeatFreshness({ heartbeat: null, now: NOW });
+  assert.equal(v.stale, true);
+  assert.match(v.reason, /no actions-watchdog heartbeat found/);
+});
+
+test('freshness: fresh within budget', () => {
+  const heartbeat = { timestamp: new Date(NOW.getTime() - 1 * 3_600_000).toISOString() };
+  const v = decideHeartbeatFreshness({ heartbeat, now: NOW, maxAgeHours: DEFAULT_HEARTBEAT_MAX_AGE_HOURS });
+  assert.equal(v.stale, false);
+  assert.ok(Math.abs(v.ageHours - 1) < 0.01);
+});
+
+test('freshness: stale past budget — the hourly timer looks dead', () => {
+  const heartbeat = { timestamp: new Date(NOW.getTime() - (DEFAULT_HEARTBEAT_MAX_AGE_HOURS + 1) * 3_600_000).toISOString() };
+  const v = decideHeartbeatFreshness({ heartbeat, now: NOW, maxAgeHours: DEFAULT_HEARTBEAT_MAX_AGE_HOURS });
+  assert.equal(v.stale, true);
+  assert.match(v.reason, /heartbeat is .*h old/);
+});
+
+test('freshness: stale on an unparseable heartbeat timestamp', () => {
+  const heartbeat = { timestamp: 'not-a-date' };
+  const v = decideHeartbeatFreshness({ heartbeat, now: NOW });
+  assert.equal(v.stale, true);
+  assert.match(v.reason, /unparseable/);
 });

@@ -190,9 +190,10 @@ if (pull.code !== 0) {
   }
 
   // graph.json is a generated index, not authored content — it is rewritten whole on every graph
-  // write, so a conflict there is guaranteed the moment two hosts think. Take our side and let the
-  // next graph-init rebuild it from nodes/, which is where the real facts live. Anything else is a
-  // genuine content conflict and stops here for a human.
+  // write, so a conflict there is guaranteed the moment two hosts think. Take our side and let
+  // graph-reindex.js rebuild it from nodes/, which is where the real facts live. (graph-init.js is
+  // the wrong tool here — it mines THIS repo's git log and scaffolds new nodes, not a brain reindex.)
+  // Anything else is a genuine content conflict and stops here for a human.
   const generated = conflicts.filter((f) => path.basename(f) === 'graph.json');
   const real = conflicts.filter((f) => path.basename(f) !== 'graph.json');
 
@@ -208,7 +209,7 @@ if (pull.code !== 0) {
   git(['add', ...generated]);
   git([...IDENT, 'commit', '--quiet', '--no-edit']);
   log(`resolved ${generated.length} generated graph.json conflict(s) — ` +
-      `regenerate with tools/graph/graph-init.js`);
+      `regenerate with tools/graph-reindex.js`);
 }
 
 // ---------------------------------------------------------------------------- push

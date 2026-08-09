@@ -143,6 +143,6 @@ say "merged  $(git -C "$ROOT" ls-files | wc -l | tr -d ' ') files tracked"
 # only on this host are on disk but absent from the index, so graph-query cannot see them. Rebuild.
 say
 say "Next: rebuild the graph indexes so this host's own nodes are searchable —"
-say "  node tools/graph/graph-init.js <slug> <repo-path>   # per repo brain"
+say "  node tools/graph-reindex.js   # sweeps every brain under agent-memory/nexus"
 say "then push the union back:"
 say "  node tools/brain-sync.js"
