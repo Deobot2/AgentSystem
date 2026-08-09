@@ -581,6 +581,7 @@
     <button class="tab-btn" onclick="switchTab('memory')">🧠 Memory</button>
     <button class="tab-btn" onclick="switchTab('scratchpads'); loadScratchpads();">📝 Tasks</button>
     <button class="tab-btn" onclick="switchTab('briefing'); loadBriefing();">📰 Briefing</button>
+    <button class="tab-btn" onclick="switchTab('ops'); loadOps();">🛠️ Ops</button>
   </nav>
 
   <main>
@@ -649,12 +650,38 @@
         <div class="chip-row" id="template-chips"></div>
       </div>
 
+      <!-- Skills and slash commands installed on the host. Tapping one prefixes the prompt with
+           `/<name>`, which is how a dispatched `claude -p` session invokes either. -->
+      <div class="form-group">
+        <label for="skill-filter">Skills &amp; Commands</label>
+        <input type="text" id="skill-filter" placeholder="Filter skills / commands…" oninput="renderSkillChips()">
+        <div class="chip-row" id="skill-chips" style="margin-top:8px;"><span class="loading">Loading skills…</span></div>
+      </div>
+
       <div class="form-group">
         <label for="prompt-input">Instruction / Prompt</label>
         <textarea id="prompt-input" rows="4" placeholder="Enter instructions for the agent..."></textarea>
       </div>
 
       <button class="btn-submit" id="btn-dispatch" onclick="dispatchSession()">Launch Agent Session</button>
+    </section>
+
+    <!-- Swarm: N sessions in one call. Uses the harness/repo/model selected above; each row
+         picks its own agent and prompt. Server caps how many run concurrently
+         (MC_MAX_PER_HARNESS) and returns the rejected rows rather than failing the whole batch. -->
+    <section class="glass-card">
+      <h2>🐝 Swarm Dispatch</h2>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:14px;">
+        Launch several agents at once against the repository selected above. Rows over the
+        concurrency cap come back rejected — nothing is silently dropped.
+      </p>
+      <div id="swarm-rows"></div>
+      <div class="chip-row" style="margin-bottom:14px;">
+        <button type="button" class="chip" onclick="addSwarmRow()">+ Add agent</button>
+        <button type="button" class="chip" onclick="fanOutSwarm()">Fan out prompt to all rows</button>
+      </div>
+      <button class="btn-submit" id="btn-swarm" onclick="dispatchSwarm()">Launch Swarm</button>
+      <div id="swarm-result" style="margin-top:14px;"></div>
     </section>
   </div>
 
@@ -858,6 +885,23 @@
       <pre id="briefing-body" class="terminal-box" style="max-height: 70vh;">
         <div class="loading">Loading briefing...</div>
       </pre>
+    </section>
+  </div>
+
+  <!-- PANEL: OPS — the allowlisted maintenance commands from GET /ops. Every button maps to one
+       registry entry server-side; there is no free-form command field on purpose. -->
+  <div id="panel-ops" class="panel-content">
+    <section class="glass-card">
+      <h2>🛠️ Operations</h2>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:14px;">
+        Routines, Life OS health, alerts, brain sync, fleet drift checks. Buttons marked
+        <strong>⚠</strong> change state and ask before running.
+      </p>
+      <div id="ops-list"><div class="loading">Loading operations…</div></div>
+    </section>
+    <section class="glass-card">
+      <h2>Output</h2>
+      <pre id="ops-output" class="terminal-box" style="max-height:60vh;">No operation run yet.</pre>
     </section>
   </div>
   </main>
@@ -1302,6 +1346,161 @@
       }
     }
 
+    // ── Skills / slash commands (GET /skills) ──
+    let SKILLS = { skills: [], commands: [] };
+
+    async function loadSkills() {
+      try {
+        SKILLS = await api('/skills');
+      } catch (e) {
+        document.getElementById('skill-chips').innerHTML =
+          '<div class="error">Failed to load skills: ' + escapeHtml(e.message) + '</div>';
+        return;
+      }
+      renderSkillChips();
+    }
+
+    function renderSkillChips() {
+      const q = (document.getElementById('skill-filter').value || '').toLowerCase();
+      const match = e => !q || e.name.toLowerCase().includes(q) || (e.description || '').toLowerCase().includes(q);
+      const items = [
+        ...SKILLS.commands.filter(match).map(e => ({ ...e, kind: 'command' })),
+        ...SKILLS.skills.filter(match).map(e => ({ ...e, kind: 'skill' })),
+      ];
+      const box = document.getElementById('skill-chips');
+      if (!items.length) { box.innerHTML = '<span class="loading">No match.</span>'; return; }
+      // Cap the render: the host has ~30 today but a marketplace install can add dozens, and a
+      // 200-chip wall is unusable on a phone. The filter box is how you reach the rest.
+      const shown = items.slice(0, 40);
+      box.innerHTML = shown.map(e =>
+        `<button type="button" class="chip tmpl" title="${escapeHtml((e.source || '') + ' — ' + (e.description || 'no description'))}" ` +
+        `onclick="applySkill(${jsArg(e.name)})">/${escapeHtml(e.name)}</button>`
+      ).join('') + (items.length > shown.length
+        ? `<span class="loading">+${items.length - shown.length} more — filter to narrow</span>` : '');
+    }
+
+    // Prefix rather than replace: the skill name is the command, anything already typed is its
+    // argument, and clobbering a written prompt on a mis-tap is the worse failure.
+    function applySkill(name) {
+      const el = document.getElementById('prompt-input');
+      const rest = el.value.replace(/^\/\S+\s*/, '');
+      el.value = `/${name}` + (rest ? ' ' + rest : ' ');
+      el.focus();
+    }
+
+    // ── Swarm dispatch ──
+    function agentOptionsHtml() {
+      return document.getElementById('agent-select').innerHTML;
+    }
+
+    function addSwarmRow(agent, prompt) {
+      const rows = document.getElementById('swarm-rows');
+      const div = document.createElement('div');
+      div.className = 'swarm-row';
+      div.style.cssText = 'border:1px solid var(--border-subtle); border-radius:var(--radius); padding:12px; margin-bottom:10px;';
+      div.innerHTML =
+        `<select class="swarm-agent">${agentOptionsHtml()}</select>` +
+        `<textarea class="swarm-prompt" rows="2" placeholder="Task for this agent…"></textarea>` +
+        `<button type="button" class="chip" onclick="this.closest('.swarm-row').remove()">Remove</button>`;
+      rows.appendChild(div);
+      if (agent) div.querySelector('.swarm-agent').value = agent;
+      if (prompt) div.querySelector('.swarm-prompt').value = prompt;
+    }
+
+    // Same task, several agents — the common swarm shape (N reviewers, N lenses).
+    function fanOutSwarm() {
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) { alert('Type the shared task in the Instruction / Prompt box first.'); return; }
+      document.querySelectorAll('#swarm-rows .swarm-prompt').forEach(el => { el.value = prompt; });
+    }
+
+    async function dispatchSwarm() {
+      const repo = document.getElementById('repo-select').value;
+      const model = document.getElementById('model-select').value;
+      const tasks = Array.from(document.querySelectorAll('#swarm-rows .swarm-row')).map(r => ({
+        agent: r.querySelector('.swarm-agent').value,
+        prompt: r.querySelector('.swarm-prompt').value.trim(),
+      })).filter(t => t.prompt);
+
+      if (!repo) { alert('Select a repository first'); return; }
+      if (!tasks.length) { alert('Add at least one agent row with a prompt'); return; }
+
+      const btn = document.getElementById('btn-swarm');
+      btn.disabled = true;
+      btn.textContent = `Launching ${tasks.length} session(s)…`;
+      const out = document.getElementById('swarm-result');
+      out.innerHTML = '<div class="loading">Dispatching…</div>';
+
+      try {
+        const data = await api('/swarm', {
+          method: 'POST',
+          body: JSON.stringify({
+            harness: currentHarness,
+            repo,
+            model: currentHarness === 'agy' ? (model || null) : null,
+            tasks,
+          }),
+        });
+        const ok = (data.dispatched || []).map(d =>
+          `<div>✅ ${escapeHtml(d.agent || currentHarness)} — <code>${escapeHtml(d.id)}</code></div>`).join('');
+        const bad = (data.rejected || []).map(r =>
+          `<div>⛔ ${escapeHtml(r.agent || '?')} — ${escapeHtml(r.error || r.reason || 'rejected')}</div>`).join('');
+        out.innerHTML = `<div>Dispatched ${(data.dispatched || []).length}/${data.requested}` +
+          ` (cap ${escapeHtml(String(data.cap))} per harness)</div>${ok}${bad}`;
+        loadSessions();
+      } catch (e) {
+        out.innerHTML = '<div class="error">Swarm failed: ' + escapeHtml(e.message) + '</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Launch Swarm';
+      }
+    }
+
+    // ── Ops tab (GET /ops, POST /ops/run) ──
+    let OPS = [];
+
+    async function loadOps() {
+      const box = document.getElementById('ops-list');
+      if (OPS.length) return;   // static registry — fetch once
+      try {
+        OPS = (await api('/ops')).ops || [];
+      } catch (e) {
+        box.innerHTML = '<div class="error">Failed to load operations: ' + escapeHtml(e.message) + '</div>';
+        return;
+      }
+      const groups = {};
+      for (const o of OPS) (groups[o.group || 'Other'] ||= []).push(o);
+      box.innerHTML = Object.entries(groups).map(([g, list]) =>
+        `<div class="form-group"><label>${escapeHtml(g)}</label><div class="chip-row">` +
+        list.map(o =>
+          `<button type="button" class="chip${o.mutates ? ' recent' : ''}" onclick="runOp(${jsArg(o.id)})">` +
+          `${o.mutates ? '⚠ ' : ''}${escapeHtml(o.label)}${o.arg ? ' …' : ''}</button>`
+        ).join('') + '</div></div>'
+      ).join('');
+    }
+
+    async function runOp(id) {
+      const op = OPS.find(o => o.id === id);
+      if (!op) return;
+
+      let arg = null;
+      if (op.arg) {
+        arg = prompt(`${op.label} — enter ${op.arg.hint || 'argument'}:`);
+        if (!arg) return;
+      }
+      if (op.mutates && !confirm(`${op.label} changes state on this host. Run it?`)) return;
+
+      const out = document.getElementById('ops-output');
+      out.textContent = `Running ${op.label}…`;
+      try {
+        const data = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id, arg }) });
+        out.textContent = `$ ${data.command}\n(exit ${data.exitCode} in ${data.ms}ms)\n\n` +
+          (data.output || '(no output)');
+      } catch (e) {
+        out.textContent = 'Failed: ' + e.message;
+      }
+    }
+
     async function dispatchSession() {
       const repo = document.getElementById('repo-select').value;
       const prompt = document.getElementById('prompt-input').value.trim();
@@ -1623,6 +1822,9 @@
     updateAlertsBtn();
     renderTemplateChips();
     renderRecentChips();
+    loadSkills();
+    addSwarmRow('friday');
+    addSwarmRow('sam');
     loadRepos();
     loadCost();
     loadSessions();

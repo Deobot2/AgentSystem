@@ -68,6 +68,17 @@ test.before(async () => {
     JSON.stringify({ repos: [{ slug: 'demo', path: home, bootstrap_complete: true }] }));
   writeFileSync(path.join(home, 'agent-memory', 'nexus', 'tasks', 'demo', '42', 'scratchpad.md'), '# scratch\nhello\n');
 
+  // Both marketplace layouts, because only reading the flat one found 7 commands on a host
+  // that has ~40. `~/.claude/skills` is deliberately left absent so the missing-dir path
+  // stays covered too.
+  const mp = path.join(home, '.claude', 'plugins', 'marketplaces');
+  mkdirSync(path.join(mp, 'flat', 'skills', 'flat-skill'), { recursive: true });
+  writeFileSync(path.join(mp, 'flat', 'skills', 'flat-skill', 'SKILL.md'), '---\ndescription: a flat one\n---\n');
+  mkdirSync(path.join(mp, 'bundle', 'plugins', 'inner', 'skills', 'nested-skill'), { recursive: true });
+  writeFileSync(path.join(mp, 'bundle', 'plugins', 'inner', 'skills', 'nested-skill', 'SKILL.md'), '---\ndescription: a nested one\n---\n');
+  mkdirSync(path.join(mp, 'bundle', 'plugins', 'inner', 'commands'), { recursive: true });
+  writeFileSync(path.join(mp, 'bundle', 'plugins', 'inner', 'commands', 'nested-cmd.md'), '---\ndescription: nested command\n---\n');
+
   // /branches shells out to git, so the seeded repo has to actually be one.
   // -c user.* because a CI runner has no global git identity to commit with.
   execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q', home]);
@@ -204,6 +215,118 @@ test('GET /branches reports the seeded repo branch and worktree', async () => {
   assert.ok(body.branches.some(b => b.name === 'main'), 'main missing from branch list');
   assert.equal(body.worktrees.length, 1);
   assert.equal(body.worktrees[0].branch, 'main');
+});
+
+// ── swarm dispatch ───────────────────────────────────────────────────────────
+
+test('POST /swarm requires a tasks array', async () => {
+  const r = await api('/swarm', { method: 'POST', body: JSON.stringify({ harness: 'claude', repo: 'demo' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /tasks required/);
+});
+
+test('POST /swarm rejects an oversized batch', async () => {
+  const tasks = Array.from({ length: 21 }, (_, i) => ({ agent: 'friday', prompt: `t${i}` }));
+  const r = await api('/swarm', { method: 'POST', body: JSON.stringify({ harness: 'claude', repo: 'demo', tasks }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /max 20/);
+});
+
+// Nothing is spawned here: an unknown agent is rejected before the registry entry exists.
+// The point is the shape — per-task rejections come back itemised, not as one opaque failure —
+// and that the reported cap is no longer the old hard 1.
+test('POST /swarm reports per-task rejections and the per-harness cap', async () => {
+  const r = await api('/swarm', {
+    method: 'POST',
+    body: JSON.stringify({ harness: 'claude', repo: 'demo', tasks: [{ agent: 'notanagent', prompt: 'noop' }] }),
+  });
+  assert.equal(r.status, 409);
+  const body = await r.json();
+  assert.equal(body.requested, 1);
+  assert.equal(body.dispatched.length, 0);
+  assert.match(body.rejected[0].error, /Unknown agent/);
+  assert.equal(body.rejected[0].index, 0);
+  assert.ok(body.cap > 1, `per-harness cap should be >1, got ${body.cap}`);
+});
+
+// ── skills / commands discovery ──────────────────────────────────────────────
+
+// The throwaway HOME has no `~/.claude/skills` at all, so this also pins that a missing
+// directory is an empty list, not a 500.
+test('GET /skills returns arrays and the agent roster', async () => {
+  const r = await api('/skills');
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.ok(Array.isArray(body.skills));
+  assert.ok(Array.isArray(body.commands));
+  assert.ok(body.agents.includes('friday'));
+});
+
+// Both layouts, or the picker silently shows a fraction of what is installed: the flat
+// `<marketplace>/skills/` and the nested `<marketplace>/plugins/<name>/skills/`.
+test('GET /skills finds flat and nested plugin layouts', async () => {
+  const body = await (await api('/skills')).json();
+  const skill = n => body.skills.find(s => s.name === n);
+  assert.ok(skill('flat-skill'), 'flat marketplace skill missing');
+  assert.ok(skill('nested-skill'), 'nested plugin skill missing');
+  assert.equal(skill('nested-skill').description, 'a nested one', 'frontmatter description not read');
+  assert.equal(skill('nested-skill').source, 'inner', 'nested skill should be attributed to its plugin');
+  assert.ok(body.commands.some(c => c.name === 'nested-cmd'), 'nested plugin command missing');
+});
+
+// ── allowlisted ops ──────────────────────────────────────────────────────────
+
+test('GET /ops lists allowlisted operations only', async () => {
+  const r = await api('/ops');
+  assert.equal(r.status, 200);
+  const ids = (await r.json()).ops.map(o => o.id);
+  assert.ok(ids.includes('routines.list'));
+  assert.ok(ids.includes('brain.status'));
+  // No op may name a shell or an arbitrary command runner.
+  assert.ok(!ids.some(id => /^(sh|bash|exec|shell)\b/.test(id)), `suspicious op id in ${ids.join(',')}`);
+});
+
+test('POST /ops/run refuses an id outside the registry', async () => {
+  const r = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id: '../../bin/sh' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /Unknown op/);
+});
+
+// Prototype keys must not resolve as ops — `hasOwnProperty` guard, not a bare lookup.
+test('POST /ops/run refuses prototype keys', async () => {
+  const r = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id: 'constructor' }) });
+  assert.equal(r.status, 400);
+});
+
+test('POST /ops/run rejects an arg that fails the op pattern', async () => {
+  const r = await api('/ops/run', {
+    method: 'POST',
+    body: JSON.stringify({ id: 'routines.bypass', arg: 'x; rm -rf /' }),
+  });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /requires arg matching/);
+});
+
+test('POST /ops/run rejects an arg on an op that takes none', async () => {
+  const r = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id: 'routines.list', arg: 'extra' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /takes no argument/);
+});
+
+test('POST /ops/run requires the arg when the op declares one', async () => {
+  const r = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id: 'alerts.resolve' }) });
+  assert.equal(r.status, 400);
+});
+
+// The one end-to-end run: read-only, no network, and it proves runNodeTool resolves the
+// script path and returns the child's output rather than an empty 200.
+test('POST /ops/run executes a read-only op and returns its output', async () => {
+  const r = await api('/ops/run', { method: 'POST', body: JSON.stringify({ id: 'routines.list' }) });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.id, 'routines.list');
+  assert.equal(body.command, 'node tools/routines.js list');
+  assert.ok(body.output.length > 0, 'op produced no output');
 });
 
 test('unhandled endpoint error returns 500, server survives', async () => {

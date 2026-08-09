@@ -288,8 +288,27 @@ Spawn a new session.
 **Errors:**
 - `400 Bad Request`: Missing required fields or invalid JSON.
 - `403 Forbidden`: Repo not in allowlist, or auth key invalid.
-- `409 Conflict`: Harness already running (no concurrent sessions per harness in MVP).
+- `409 Conflict`: Harness at capacity — `MC_MAX_PER_HARNESS` concurrent sessions (default 4).
 - `500 Internal Server Error`: Dispatch failed (logs in service stderr).
+
+#### `POST /swarm`
+
+Spawn several sessions in one call: `{harness, repo, model?, tasks: [{agent, prompt, repo?, model?}]}`,
+max 20 tasks. Each task runs the same validation and cap check as one `/run`. Returns `202` with
+`{requested, dispatched: [...], rejected: [...], cap}` when anything launched, `409` when the whole
+batch bounced. See `tools/mission-control/README.md` for the response shape.
+
+#### `GET /skills`
+
+`{skills, commands, agents}` — installed skills (`~/.claude/skills`, plugin marketplaces), slash
+commands, and the agent roster. The panel renders these as chips that prefix the prompt with
+`/<name>`, which is how a dispatched `claude -p` session invokes either one.
+
+#### `GET /ops` and `POST /ops/run`
+
+Allowlisted maintenance operations (routines, Life OS doctor, human-needed alerts, brain sync,
+agent/hook drift checks, session cost, graph query). `POST /ops/run` takes `{id, arg?}` and returns
+`{exitCode, ms, command, output}`. Strict registry, pattern-validated argument, no shell.
 
 #### `GET /sessions`
 
@@ -563,6 +582,7 @@ WantedBy=multi-user.target
 
 2. **Concurrent session limits:** Should MC allow multiple harness instances (e.g., two Claude sessions + one agy session) or enforce one-at-a-time? (Affects Issue #84 rate limiting.)
    - **PARTIAL/DEFERRED (spike #91):** Google AI Pro operates on a flat subscription model. agy exposes `/quota` and `/usage` endpoints. The Terms of Service regarding headless/always-on automation and any hard concurrency cap are NOT determinable from CLI inspection alone. Deferred to Nat (business/legal review) under new issue #95. If a hard limit surfaces, dispatcher #85/#88 will enforce it — noted as follow-up dependency, not yet actionable.
+   - **RESOLVED (2026-08-08):** Multiple instances are allowed, bounded rather than forbidden. `MC_MAX_PER_HARNESS` (default 4) caps sessions per harness and `MC_MAX_BG_SESSIONS` (default 8) caps the total; set `MC_MAX_PER_HARNESS=1` for the original one-at-a-time behaviour. The one-at-a-time gate was what made `POST /swarm` impossible to express.
 
 3. **Cost accounting for agy:** Google AI Pro is subscription-based, not token-counted. How should cost display work? (Impacts Issue #87 FE design.)
    - **RESOLVED (spike #91):** Quota-based, not token-metered. agy exposes `/quota` and `/usage` but has no cost-API equivalent to Claude's `/cost` endpoint. Recommendation for #87: Display a "Subscription/Quota" badge for agy sessions (showing quota usage %) instead of dollar cost; keep `/cost` metric for Claude sessions only.
