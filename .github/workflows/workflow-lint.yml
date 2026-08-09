@@ -28,12 +28,21 @@ on:
       - '.github/workflows/**'
       - 'tools/workflow-lint.js'
       - 'tools/workflow-lint.test.js'
+  # No `paths:` filter on pull_request, deliberately (#316). A required status check that is
+  # filtered out by `paths` never reports at all, so GitHub leaves it permanently pending and the
+  # PR is unmergeable — and with `enforce_admins: true` there is no override. That is strictly
+  # worse than the gap it closes, and it is the same shape as every other defect this workflow
+  # exists to catch: an *absent* check is not a *failing* one, and branch protection only makes
+  # noise about the failing kind.
+  #
+  # The alternative — keep the filter and add a companion always-run job reporting the same check
+  # name as success — was rejected: it is a second place that can silently stop reporting, which is
+  # precisely the failure mode here.
+  #
+  # The push trigger above keeps its filter. Push is not a required context, so a filtered-out push
+  # run deadlocks nothing; it just saves minutes on commits that cannot affect the result.
   pull_request:
     branches: [main, dev]
-    paths:
-      - '.github/workflows/**'
-      - 'tools/workflow-lint.js'
-      - 'tools/workflow-lint.test.js'
   workflow_dispatch:
 
 concurrency:
