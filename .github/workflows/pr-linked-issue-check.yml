@@ -1,0 +1,123 @@
+name: PR Linked Issue Check
+
+# Enforce that every PR to main has a linked issue (via branch name or body reference).
+# Exempts spec/plan PRs which are design/discussion only, not merged code.
+#
+# Links are detected by:
+# - Branch name matching issue-<N>-... pattern
+# - PR body containing "closes #N", "fix #N", "resolve #N" etc.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+# New push to branch cancels previous runs
+concurrency:
+  group: linked-issue-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-linked-issue:
+    name: PR must be linked to an issue
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Check for linked issue
+        id: check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const branch = pr.head.ref;
+            const body = pr.body || '';
+            const labels = pr.labels.map(l => l.name);
+
+            // Exempt spec/plan PRs — they are design discussion, not merged code
+            if (labels.includes('spec')) {
+              core.setOutput('exempt', 'true');
+              core.setOutput('reason', 'PR labeled spec (design/discussion, not merged code)');
+              return;
+            }
+
+            // Check for issue link in branch name (issue-<N>-...)
+            const branchMatch = branch.match(/issue-(\d+)/);
+            if (branchMatch) {
+              const issueNum = branchMatch[1];
+              core.setOutput('linked', 'true');
+              core.setOutput('reason', `Linked via branch: issue-${issueNum}`);
+              return;
+            }
+
+            // Check for issue link in PR body (closes/fix/resolve #N)
+            const closeKeywords = ['close', 'closes', 'closed', 'fix', 'fixes', 'fixed', 'resolve', 'resolves', 'resolved'];
+            const bodyMatch = body.match(
+              new RegExp(`(${closeKeywords.join('|')})\\s+#(\\d+)`, 'i')
+            );
+            if (bodyMatch) {
+              const issueNum = bodyMatch[2];
+              core.setOutput('linked', 'true');
+              core.setOutput('reason', `Linked via body: ${bodyMatch[1]} #${issueNum}`);
+              return;
+            }
+
+            // No link found
+            core.setOutput('linked', 'false');
+            core.setOutput('reason', 'No linked issue found');
+
+      - name: Comment on unlinked PR
+        if: steps.check.outputs.linked == 'false' && steps.check.outputs.exempt != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            // Check if we already commented about the missing link
+            const existing = comments.data.find(c =>
+              c.user.login === 'github-actions[bot]' && c.body.includes('PR must be linked to an issue')
+            );
+
+            if (!existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `**PR must be linked to an issue.**
+
+Link your PR using ONE of these methods:
+1. **Branch name**: \`issue-<N>-description\` (recommended)
+2. **PR body**: Include \`Closes #N\`, \`Fixes #N\`, or \`Resolves #N\`
+
+Example:
+- Branch: \`issue-42-add-auth-check\`
+- Or add to PR body: \`Closes #42\`
+
+Spec/plan PRs (labeled \`spec\`) are exempt.`,
+              });
+            }
+
+      - name: Fail check if unlinked
+        if: steps.check.outputs.linked == 'false' && steps.check.outputs.exempt != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          echo "PR #$PR_NUMBER is not linked to an issue"
+          echo "Branch: $PR_BRANCH"
+          echo "Does not match issue-<N>-... pattern and PR body has no close/fix/resolve keyword"
+          exit 1
+
+      - name: Pass check if linked or exempt
+        if: steps.check.outputs.linked == 'true' || steps.check.outputs.exempt == 'true'
+        env:
+          REASON: ${{ steps.check.outputs.reason }}
+        run: |
+          echo "✓ PR is linked to issue: $REASON"
