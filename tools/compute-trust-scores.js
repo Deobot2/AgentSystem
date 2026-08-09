@@ -34,6 +34,20 @@ function classifyResult(result, verification) {
 // at 159 bytes of "No run data yet." since 2026-07-05 -- and hooks/memory-router.js routes on that
 // file. Missing input now exits 1. --allow-empty is the deliberate first-run bootstrap escape
 // hatch, and even then an existing report is never clobbered with a stub.
+// The single marker sentence writeEmpty() emits. Kept as one constant so the writer and this
+// reader cannot drift apart -- if they did, the deadlock above comes straight back.
+const EMPTY_REPORT_MARKER = 'No run data yet.';
+
+// A read failure means "cannot prove it is a stub", which must fall through to refusing --
+// unreadable is not permission to overwrite.
+function isEmptyReport(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').includes(EMPTY_REPORT_MARKER);
+  } catch {
+    return false;
+  }
+}
+
 function missingInput(reason, { dryRun, allowEmpty }) {
   const OUTPUT_FILE = outputFile();
   if (!allowEmpty) {
@@ -42,7 +56,13 @@ function missingInput(reason, { dryRun, allowEmpty }) {
     console.error('[trust-scores] If this host has genuinely never dispatched an agent, pass --allow-empty.');
     process.exit(1);
   }
-  if (fs.existsSync(OUTPUT_FILE)) {
+  // "Exists" is not "holds data". The stub written by writeEmpty() below is committed to the
+  // agent-memory repo and therefore present on every host, so testing existence alone made
+  // --allow-empty -- this tool's own documented escape hatch -- impossible to use anywhere:
+  // weekly-trust-scores could not go green without deleting a tracked file. Refuse only when the
+  // report on disk is something other than our own empty stub; replacing a stub with a
+  // freshly-dated stub loses nothing.
+  if (fs.existsSync(OUTPUT_FILE) && !isEmptyReport(OUTPUT_FILE)) {
     console.error(`[trust-scores] ${reason}, but ${OUTPUT_FILE} already exists — refusing to replace real data with a stub.`);
     process.exit(1);
   }
@@ -134,7 +154,7 @@ function writeEmpty() {
   const md = `# Agent Trust Scores
 _Last updated: ${now}_
 
-No run data yet. Run logs are written to \`~/agent-memory/nexus/run-log/\` by agent-dispatch.yml.
+${EMPTY_REPORT_MARKER} Run logs are written to \`~/agent-memory/nexus/run-log/\` by agent-dispatch.yml.
 `;
   const outDir = path.dirname(OUTPUT_FILE);
   if (!fs.existsSync(outDir)) {

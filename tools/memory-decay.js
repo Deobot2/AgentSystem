@@ -55,6 +55,12 @@ function discoverBrains(nexusDir) {
     .sort();
 
   for (const name of entries) {
+    // Dot-directories are tool state, never brains. `~/agent-memory` is an Obsidian vault, and
+    // Obsidian keeps its graph-VIEW settings at `.obsidian/graph.json` -- the same filename a
+    // brain uses, with completely unrelated content. Discovery keyed on the filename alone, so
+    // `.obsidian` sorted first, was adopted as brain #1, and killed the whole weekly job with
+    // `TypeError: graph.nodes is not iterable` before one real brain was touched.
+    if (name.startsWith('.')) continue;
     if (existsSync(join(nexusDir, name, 'graph.json'))) found.push(name);
     if (name !== 'agent-brain') continue;
     const agents = readdirSync(join(nexusDir, name), { withFileTypes: true })
@@ -116,6 +122,19 @@ function decayBrain(brain, { dryRun, archiveThreshold, requireGraph }) {
       process.exit(1);
     }
     console.log(`decay pass [${brain}]: no graph.json at ${graphPath} -- brain not initialized on this host, skipping`);
+    return { brain, skipped: true, archived: 0, active: 0 };
+  }
+
+  // Second line of defence, independent of the dot-directory rule above: a file named graph.json
+  // is not evidence of a brain. Validate the shape before iterating it, so an unrelated
+  // graph.json anywhere under nexus/ costs one skipped brain instead of the entire pass. The
+  // crash this replaces killed every brain sorted after the offender, not just the offender.
+  if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
+    if (requireGraph) {
+      console.error(`decay pass [${brain}]: ${graphPath} is not a brain graph (no nodes/edges arrays) -- refusing to report success for a brain that was explicitly requested.`);
+      process.exit(1);
+    }
+    console.log(`decay pass [${brain}]: ${graphPath} is not a brain graph (no nodes/edges arrays), skipping`);
     return { brain, skipped: true, archived: 0, active: 0 };
   }
 
@@ -244,7 +263,10 @@ function main() {
 
   const archived = results.reduce((n, r) => n + r.archived, 0);
   const active = results.reduce((n, r) => n + r.active, 0);
-  console.log(`decay pass: ${results.length} brain(s) processed, ${archived} edge(s) archived, ${active} edge(s) active`);
+  // Count what was actually decayed, not what was looked at. A skipped brain in the "processed"
+  // total is the same false-green this job already shipped once.
+  const processed = results.filter((r) => !r.skipped).length;
+  console.log(`decay pass: ${processed} brain(s) processed, ${archived} edge(s) archived, ${active} edge(s) active`);
 }
 
 main();

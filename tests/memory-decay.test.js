@@ -145,3 +145,37 @@ test('memory-decay: --brain and --all are mutually exclusive', () => {
     assert.equal(status, 1);
   });
 });
+
+// Obsidian stores its graph-VIEW settings at `.obsidian/graph.json` -- same filename as a brain
+// graph, completely unrelated content (collapse-filter, nodeSizeMultiplier, ...). Discovery keyed
+// on the filename alone, so on the runner (~/agent-memory is an Obsidian vault) `.obsidian` was
+// adopted as brain #1 and the decay pass died on `TypeError: graph.nodes is not iterable` before
+// touching a single real brain. Two independent defects, so two independent tests.
+test('memory-decay --all: dot-directories are not brains (.obsidian/graph.json is Obsidian config)', () => {
+  withRoot((memoryRoot) => {
+    seedBrain(memoryRoot, 'personal-brain');
+    mkdirSync(join(memoryRoot, 'nexus', '.obsidian'), { recursive: true });
+    writeFileSync(
+      join(memoryRoot, 'nexus', '.obsidian', 'graph.json'),
+      JSON.stringify({ 'collapse-filter': true, search: '', nodeSizeMultiplier: 1 }),
+    );
+
+    const stdout = run(memoryRoot, ['--all', '--dry-run']);
+    assert.match(stdout, /1 brain\(s\) found/);
+    assert.doesNotMatch(stdout, /\.obsidian/);
+  });
+});
+
+test('memory-decay: a graph.json without a nodes array is skipped, not a crash', () => {
+  withRoot((memoryRoot) => {
+    seedBrain(memoryRoot, 'personal-brain');
+    // Not hidden, so discovery accepts it -- only shape validation can reject this one.
+    const bogus = join(memoryRoot, 'nexus', 'notabrain');
+    mkdirSync(bogus, { recursive: true });
+    writeFileSync(join(bogus, 'graph.json'), JSON.stringify({ scale: 1, showTags: false }));
+
+    const stdout = run(memoryRoot, ['--all', '--dry-run']);
+    assert.match(stdout, /not a brain graph/i);
+    assert.match(stdout, /1 brain\(s\) processed/);
+  });
+});

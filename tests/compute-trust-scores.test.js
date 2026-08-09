@@ -102,3 +102,33 @@ test('real run logs produce a real report', () => {
     assert.match(md, /\| leo \| 2 \| 1 \| 1 \| 0 \| 50% \|/);
   });
 });
+
+// The "already exists" guard tested existence as a proxy for "holds real data", and the file it
+// was protecting on every host was the tool's OWN empty stub -- committed to the agent-memory
+// repo and synced everywhere. So --allow-empty, the documented escape hatch, could never fire:
+// weekly-trust-scores was unfixable short of deleting a tracked file. A stub is not data.
+test('--allow-empty replaces the tool\'s own empty stub instead of deadlocking', () => {
+  withRoot((root, report) => {
+    mkdirSync(join(root, 'nexus'), { recursive: true });
+    writeFileSync(report, [
+      '# Agent Trust Scores',
+      '_Last updated: 2026-07-06T05:15:28.729Z_',
+      '',
+      'No run data yet. Run logs are written to `~/agent-memory/nexus/run-log/` by agent-dispatch.yml.',
+    ].join('\n'));
+
+    const stdout = run(root, ['--allow-empty']);
+    assert.match(stdout, /writing empty report/);
+  });
+});
+
+test('--allow-empty still refuses to replace a report holding real run data', () => {
+  withRoot((root, report) => {
+    mkdirSync(join(root, 'nexus'), { recursive: true });
+    writeFileSync(report, '# Agent Trust Scores\n\n| agent | runs | success |\n| friday | 12 | 11 |\n');
+
+    const { status, stderr } = runExpectingFailure(root, ['--allow-empty']);
+    assert.equal(status, 1);
+    assert.match(stderr, /refusing to replace real data/);
+  });
+});
