@@ -9,7 +9,14 @@ name: PR Linked Issue Check
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # `edited`, `labeled` and `unlabeled` are here so the check's own documented remedies can
+    # actually clear it. With only [opened, synchronize], a PR opened unlinked stayed red until
+    # someone pushed a commit: editing the body to add `Closes #N` — the fix this workflow's own
+    # comment tells you to make — fired no event, and neither did applying the `spec` label, which
+    # is the only way to claim the exemption. Once this is a required status check that is a merge
+    # deadlock with no non-admin way out, so the trigger has to cover the remedy, not just the
+    # offence.
+    types: [opened, synchronize, edited, labeled, unlabeled]
     branches: [main]
 
 # New push to branch cancels previous runs
@@ -22,8 +29,12 @@ jobs:
     name: PR must be linked to an issue
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: read
-      issues: write
+      # `issues.createComment` against a PR is authorized by `pull-requests`, not `issues` — the
+      # endpoint is shared but the scope check follows the resource. With only `issues: write` the
+      # comment step 403s "Resource not accessible by integration", so an unlinked PR got a red X
+      # and no explanation. This workflow is `on: pull_request` and never touches an issue, so
+      # `issues:` is dropped rather than widened. Encoded in tests/workflow_permissions.test.js.
+      pull-requests: write
     steps:
       - name: Check for linked issue
         id: check
@@ -74,14 +85,19 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const comments = await github.rest.issues.listComments({
+            // per_page: 100 is load-bearing, not a tuning knob. At the default 30 the
+            // prior bot comment falls off page 1 on a busy PR, dedupe misses, and we
+            // post again -- which raises the comment count and makes the miss permanent.
+            // `edited` is a trigger, so an author could drive that loop at zero cost.
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
 
             // Check if we already commented about the missing link
-            const existing = comments.data.find(c =>
+            const existing = comments.find(c =>
               c.user.login === 'github-actions[bot]' && c.body.includes('PR must be linked to an issue')
             );
 
@@ -92,15 +108,15 @@ jobs:
                 issue_number: context.issue.number,
                 body: `**PR must be linked to an issue.**
 
-Link your PR using ONE of these methods:
-1. **Branch name**: \`issue-<N>-description\` (recommended)
-2. **PR body**: Include \`Closes #N\`, \`Fixes #N\`, or \`Resolves #N\`
+            Link your PR using ONE of these methods:
+            1. **Branch name**: \`issue-<N>-description\` (recommended)
+            2. **PR body**: Include \`Closes #N\`, \`Fixes #N\`, or \`Resolves #N\`
 
-Example:
-- Branch: \`issue-42-add-auth-check\`
-- Or add to PR body: \`Closes #42\`
+            Example:
+            - Branch: \`issue-42-add-auth-check\`
+            - Or add to PR body: \`Closes #42\`
 
-Spec/plan PRs (labeled \`spec\`) are exempt.`,
+            Spec/plan PRs (labeled \`spec\`) are exempt.`,
               });
             }
 

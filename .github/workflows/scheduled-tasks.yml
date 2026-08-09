@@ -46,14 +46,23 @@ on:
         options:
           - daily-triage
           - weekly-agent-review
+          - enforcement-drift-check
 
 jobs:
   # Enforcement drift check — verify repo vs deployed state consistency.
   # Runs daily to catch hook/agent/routine deploy drift early, before it causes outages.
   # Raises human-needed alert on any drift detected, resolves on clean runs.
   enforcement-drift-check:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+    # Dispatchable as well as scheduled: a check that can only fire at 03:00 UTC cannot be proven
+    # to work, and this one shipped unrun. `gh workflow run scheduled-tasks.yml -f
+    # job=enforcement-drift-check` exercises it on demand. The `job` input still defaults to
+    # daily-triage, so a bare dispatch behaves exactly as before.
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.job == 'enforcement-drift-check')
     runs-on: [self-hosted, Linux]
+    # GH_TOKEN deliberately unset — see the #gh-token-shadow note on daily-triage. `gh` falls
+    # through to the runner's own hosts.yml PAT, which is what human-needed.js needs to write.
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve gh/node absolute paths for runner service context
@@ -114,7 +123,7 @@ jobs:
         if: steps.drift.outputs.drift_found == '1'
         shell: bash
         run: |
-          "${{ github.workspace }}/tools/human-needed.js" raise enforcement-drift \
+          "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" raise enforcement-drift \
             --title "CI/CD enforcement drift detected" \
             --why "Daily drift check on $(date -u +%Y-%m-%dT%H:%M:%SZ) found mismatches between repo and deployed state. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." \
             --action "Run the three --check tools locally to diagnose:
@@ -138,7 +147,7 @@ jobs:
         if: steps.drift.outputs.drift_found == '0'
         shell: bash
         run: |
-          "${{ github.workspace }}/tools/human-needed.js" resolve enforcement-drift \
+          "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" resolve enforcement-drift \
             --comment "Daily enforcement drift check passed at $(date -u +%Y-%m-%dT%H:%M:%SZ). All hooks, agents, and cron routines verified in sync." \
             || echo "::warning::could not resolve human-needed alert"
 
