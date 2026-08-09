@@ -50,7 +50,9 @@ function hasUncommittedChanges(cwd) {
   }
 }
 
-if (require.main === module) {
+const isWorkerInvocation = process.argv.includes('--worker');
+
+if (require.main === module && !isWorkerInvocation) {
   let sessionId = null;
   let cwd = null;
 
