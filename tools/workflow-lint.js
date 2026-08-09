@@ -381,6 +381,71 @@ export function checkScriptBody(body) {
   }
 }
 
+// ── GITHUB_OUTPUT / GITHUB_ENV multi-line `key=value` check ─────────────────────────────────────
+//
+// #352: `echo "drift_results=$(printf '%b' "$results")" >> "$GITHUB_OUTPUT"` failed at runtime —
+// "Unable to process file command 'output' successfully" — because $results was built by
+// appending literal `\n` and `printf '%b'` expanded those into real newlines. The `key=value`
+// GITHUB_OUTPUT/GITHUB_ENV form only accepts a single-line value; a genuinely multi-line value
+// must use the `key<<DELIM` heredoc form instead.
+//
+// Deliberately narrow: a blanket "no `$(` in a GITHUB_OUTPUT append" rule would flag five
+// PROVABLY single-line command substitutions elsewhere in this repo (a resolved binary path, a
+// `true`/`false` ternary) — false positives on a repo-wide gate are the one failure mode this
+// tool cannot afford (see the `WORKFLOW_EXPR` comment above). So this only fires when the value is
+// demonstrably multi-line:
+//   (a) the value itself uses `printf` with a `%b` conversion, or contains a literal `\n`; or
+//   (b) the value is a bare `$VAR`/`${VAR}` and, within the same script block, that variable is
+//       assigned somewhere with a literal `\n` in the assigned text.
+const GITHUB_OUTPUT_LINE =
+  /^(\s*)echo\s+(["'])([A-Za-z_][A-Za-z0-9_]*)=(.*)\2\s*>>\s*["']?\$\{?(GITHUB_OUTPUT|GITHUB_ENV)\}?["']?\s*$/;
+
+const BARE_VAR_VALUE = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/;
+
+// `VAR=...` / `local VAR=...` / `export VAR=...` assignment, capturing the RHS up to end of line.
+// Deliberately simple (no shell-quote awareness) — it only has to notice a literal `\n` appearing
+// anywhere in the assigned text, not parse the assignment.
+const VAR_ASSIGNMENT = /^\s*(?:local\s+|export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+
+/**
+ * @param {string} body a shell script block (e.g. the contents of a `run: |` block scalar)
+ * @param {number} bodyFirstLine 1-based line number of the block's first line, for reporting
+ * @returns {Array<{line:number, rule:string, message:string}>}
+ */
+export function checkGithubOutputMultiline(body, bodyFirstLine) {
+  const lines = body.split('\n');
+
+  // Which variables are, anywhere in this block, assigned a value containing a literal `\n`.
+  const multilineVars = new Set();
+  for (const line of lines) {
+    const m = VAR_ASSIGNMENT.exec(line);
+    if (m && m[2].includes('\\n')) multilineVars.add(m[1]);
+  }
+
+  const findings = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = GITHUB_OUTPUT_LINE.exec(lines[i]);
+    if (!m) continue;
+    const [, , , key, value, target] = m;
+
+    const looksMultiline =
+      (/printf/.test(value) && /%b/.test(value)) ||
+      value.includes('\\n') ||
+      (BARE_VAR_VALUE.test(value) && multilineVars.has(BARE_VAR_VALUE.exec(value)[1]));
+
+    if (!looksMultiline) continue;
+
+    findings.push({
+      line: bodyFirstLine + i,
+      rule: 'github-output-multiline',
+      message:
+        `"${key}=${value}" appended to $${target} is a multi-line value — the \`key=value\` form ` +
+        `only accepts a single line; use the \`${key}<<EOF\` heredoc form instead`,
+    });
+  }
+  return findings;
+}
+
 // ── File-level lint ──────────────────────────────────────────────────────────────────────────
 
 /**
@@ -394,16 +459,18 @@ export function lintWorkflowText(filePath, text) {
 
   let scriptBlocks = 0;
   for (const scalar of extractBlockScalars(source)) {
-    if (scalar.key !== 'script') continue;
-    scriptBlocks++;
-    const result = checkScriptBody(scalar.body);
-    if (!result.ok) {
-      findings.push({
-        line: scalar.firstLine,
-        rule: 'script-syntax',
-        message: `script: block is not valid JavaScript: ${result.message}`,
-      });
+    if (scalar.key === 'script') {
+      scriptBlocks++;
+      const result = checkScriptBody(scalar.body);
+      if (!result.ok) {
+        findings.push({
+          line: scalar.firstLine,
+          rule: 'script-syntax',
+          message: `script: block is not valid JavaScript: ${result.message}`,
+        });
+      }
     }
+    findings.push(...checkGithubOutputMultiline(scalar.body, scalar.firstLine));
   }
 
   findings.sort((a, b) => a.line - b.line);

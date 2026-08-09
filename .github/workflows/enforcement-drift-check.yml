@@ -98,17 +98,38 @@ jobs:
           fi
 
           echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
-          echo "drift_results=$(printf '%b' "$results")" >> "$GITHUB_OUTPUT"
+
+          # $results holds literal `\n` appended above; printf '%b' expands it into a genuinely
+          # multi-line value. The `key=value` GITHUB_OUTPUT form only accepts a single line
+          # (#352) — use the `key<<DELIM` heredoc form instead. The delimiter is timestamped so
+          # it cannot collide with content inside $results.
+          DELIM="DRIFT_EOF_$(date +%s%N)"
+          {
+            echo "drift_results<<$DELIM"
+            printf '%b' "$results"
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '%b' "$results" | tee -a "$GITHUB_STEP_SUMMARY" > /dev/null
+
           exit "$driftFound"
         continue-on-error: true
 
       - name: Raise alert on drift detected
         if: steps.drift.outputs.drift_found == '1'
         shell: bash
+        env:
+          # Passed via env, NOT interpolated into the script body: DRIFT_RESULTS is a multi-line
+          # value carried through steps.drift.outputs.drift_results, and splicing that directly
+          # into the run: text is the same script-injection shape hardened in e05a9cf
+          # (pr-linked-issue-check). Referencing it as "$DRIFT_RESULTS" keeps it as inert data.
+          DRIFT_RESULTS: ${{ steps.drift.outputs.drift_results }}
         run: |
           "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/human-needed.js" raise enforcement-drift \
             --title "CI/CD enforcement drift detected" \
-            --why "Daily drift check on $(date -u +%Y-%m-%dT%H:%M:%SZ) found mismatches between repo and deployed state. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details." \
+            --why "Daily drift check on $(date -u +%Y-%m-%dT%H:%M:%SZ) found mismatches between repo and deployed state. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+
+          $DRIFT_RESULTS" \
             --action "Run the three --check tools locally to diagnose:
           \`\`\`bash
           node tools/deploy-hooks.js --check

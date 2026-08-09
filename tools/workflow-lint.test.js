@@ -24,6 +24,7 @@ import {
   lintWorkflowText,
   lint,
   stripWorkflowExpressions,
+  checkGithubOutputMultiline,
 } from './workflow-lint.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -336,6 +337,62 @@ test('checkYamlStructure accepts ordinary workflow shapes', () => {
     '          exit 0'
   );
   assert.deepEqual(checkYamlStructure(ok), []);
+});
+
+// ── `github-output-multiline`: #352 ──────────────────────────────────────────────────────────
+//
+// The offending line from .github/workflows/enforcement-drift-check.yml:101, pre-fix. `results`
+// was built (line 3 here) by appending a literal `\n`, so `printf '%b'` expands it into a
+// genuinely multi-line value — and the `key=value` GITHUB_OUTPUT form only accepts one line.
+
+test('fires on the exact pre-fix enforcement-drift-check.yml line-101 shape', () => {
+  const body = L(
+    'set +e',
+    'results=""',
+    'results="${results}• Agent definition drift detected\\n"',
+    'echo "drift_results=$(printf \'%b\' "$results")" >> "$GITHUB_OUTPUT"'
+  );
+  const findings = checkGithubOutputMultiline(body, 1);
+  assert.deepEqual(rules(findings), ['github-output-multiline']);
+  assert.match(findings[0].message, /drift_results<<EOF/);
+});
+
+test('fires on a bare $VAR whose value was assigned with a literal \\n elsewhere in the block', () => {
+  const body = L(
+    'results=""',
+    'results="${results}foo\\n"',
+    'echo "drift_results=$results" >> "$GITHUB_OUTPUT"'
+  );
+  const findings = checkGithubOutputMultiline(body, 1);
+  assert.deepEqual(rules(findings), ['github-output-multiline']);
+});
+
+// The five real single-line command-substitution shapes surveyed across the repo (#352's
+// investigation) — a blanket "no `$(` in a GITHUB_OUTPUT append" rule would false-positive on
+// every one of these, which is the failure mode this rule must not have.
+test('does not fire on real single-line command-substitution shapes', () => {
+  const singleLineShapes = [
+    'echo "gh_path=$(resolve gh "$HOME/.local/bin/gh" /usr/local/bin/gh /usr/bin/gh)" >> "$GITHUB_OUTPUT"',
+    'echo "claude_path=$(resolve claude "$HOME/.local/bin/claude" /usr/local/bin/claude /usr/bin/claude)" >> "$GITHUB_OUTPUT"',
+    'echo "node_path=$(resolve node "$HOME/.local/bin/node" /usr/local/bin/node /usr/bin/node)" >> "$GITHUB_OUTPUT"',
+    'echo "down=$([ "$state" = down ] && echo true || echo false)" >> "$GITHUB_OUTPUT"',
+  ];
+  for (const line of singleLineShapes) {
+    const findings = checkGithubOutputMultiline(line, 1);
+    assert.deepEqual(findings, [], `expected no finding for: ${line}`);
+  }
+});
+
+test('does not fire on a bare $VAR whose assignments never contain a literal \\n', () => {
+  const body = L('agent="friday"', 'echo "agent=$agent" >> "$GITHUB_OUTPUT"');
+  assert.deepEqual(checkGithubOutputMultiline(body, 1), []);
+});
+
+test('every workflow in .github/workflows has no github-output-multiline finding', () => {
+  const report = lint([REPO_WORKFLOWS]);
+  const problems = report.files
+    .flatMap((f) => f.findings.filter((x) => x.rule === 'github-output-multiline').map((x) => `${f.file}:${x.line}`));
+  assert.deepEqual(problems, [], 'a multi-line value is being appended via the single-line key=value GITHUB_OUTPUT form');
 });
 
 // ── The repo's own workflows ─────────────────────────────────────────────────────────────────

@@ -16,6 +16,11 @@
 #   bash tools/install-brain-sync-timer.sh --check      # exit 1 if the units drifted or the timer is not running
 #   bash tools/install-brain-sync-timer.sh --check-units # the same, minus the liveness half (tests)
 #   bash tools/install-brain-sync-timer.sh --uninstall
+#
+# install exit codes: 0 = units written AND the timer is enabled and active. 4 = units were
+# written to disk but the systemd --user bus was unreachable (or enable failed), so the timer is
+# NOT running — a human must finish the job at a console (message on stderr names the command).
+# Anything else non-zero means the units could not even be written.
 set -euo pipefail
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -153,10 +158,43 @@ case "$MODE" in
     mkdir -p "$UNIT_DIR"
     service_unit > "$UNIT_DIR/$NAME.service"
     timer_unit   > "$UNIT_DIR/$NAME.timer"
-    loginctl enable-linger "$(whoami)" 2>/dev/null \
-      || echo "  !! could not enable linger — the timer will stop at logout, which defeats the point"
-    systemctl --user daemon-reload
-    systemctl --user enable --now "$NAME.timer"
+
+    who="$(whoami)"
+    # Best-effort, not fatal on its own — but report the outcome rather than swallowing it.
+    # Enabling linger is what starts the user manager and creates /run/user/<uid>; on a service
+    # account that has never logged in interactively, that is usually *why* the bus below is
+    # unreachable, not a side detail.
+    if loginctl enable-linger "$who" 2>/dev/null; then
+      echo "linger enabled for $who"
+    else
+      echo "  !! could not enable linger — the timer will stop at logout, which defeats the point"
+    fi
+
+    # Guarded, not chained: under `set -e` a bare `cmd || ...` here would still abort the script on
+    # failure of the first, since the whole point is to keep going and report — and a bare `cmd`
+    # with no guard at all would kill the script with a raw systemd error and no actionable
+    # message. Both are the false-green/false-abort shapes this exists to avoid (see #340 drift
+    # report: units missing AND "cannot reach the user systemd bus" on the exact host this targets).
+    #
+    # systemd's own stderr is CAPTURED, not discarded. The host this targets refuses ssh, so this
+    # message is the only diagnostic that will ever exist for the failure — and "Failed to connect
+    # to bus" (no user manager) needs a different fix from "Unit brain-sync.timer is masked" or a
+    # unit systemd refused to load. Sending it to /dev/null makes all of those one opaque exit 4.
+    bus_ok=1
+    bus_err=""
+    if ! bus_err="$(systemctl --user daemon-reload 2>&1)"; then
+      bus_ok=0
+    elif ! bus_err="$(systemctl --user enable --now "$NAME.timer" 2>&1)"; then
+      bus_ok=0
+    fi
+
+    if [ "$bus_ok" = 0 ]; then
+      echo "units written to $UNIT_DIR/$NAME.{service,timer} but NOT enabled — systemd --user is unreachable in this session (or enable failed)" >&2
+      echo "systemd said: ${bus_err:-<no output>}" >&2
+      echo "a human must run this at a console: loginctl enable-linger $who && systemctl --user daemon-reload && systemctl --user enable --now $NAME.timer" >&2
+      exit 4
+    fi
+
     echo "installed: $NAME.timer (every $INTERVAL)"
     systemctl --user list-timers "$NAME.timer" --no-pager
     ;;

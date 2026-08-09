@@ -47,6 +47,9 @@ on:
           - repair-brain
           # One-time bootstrap of ~/agent-memory/nexus/run-log/ so weekly-trust-scores can run.
           - bootstrap-run-log
+          # Re-deploy hooks + agent defs and install the memory sync timer, then prove the drift
+          # is gone. Reads ~/agent-memory but never writes it and never pushes anything.
+          - repair-install
 
 # Two dispatches touching ~/agent-memory at once would produce exactly the half-merged tree this
 # workflow exists to repair.
@@ -388,3 +391,423 @@ jobs:
       - name: Push the bootstrap into the brain repo
         shell: bash
         run: node "$GITHUB_WORKSPACE/tools/brain-sync.js"
+
+  # ── repair-install ─────────────────────────────────────────────────────────────────────────
+  #
+  # The other half of #352. `enforcement-drift-check.yml` runs four --check tools daily and, on
+  # 2026-08-09 (run 31337967555), reported 5 drifted hook files, 3 missing registrations, 4
+  # drifted agent definitions and both brain-sync units absent. Every one of those is repaired by
+  # re-running the deployer that produced them — but there is no shell on this host (see the
+  # header), so the repair had no channel. This mode is that channel.
+  #
+  # It writes to ~/.claude/{hooks,agents} and ~/.config/systemd/user ONLY. It does not write, sync,
+  # commit or push ~/agent-memory — brain-sync.js is deliberately absent from this job — and it
+  # proves that at the end by comparing the brain's HEAD before and after.
+  #
+  # ── Why two different repo roots, which is NOT a mistake ─────────────────────────────────────
+  #
+  # deploy-hooks.js and sync-agents.js run from $GITHUB_WORKSPACE. They copy files INTO
+  # ~/.claude and register commands whose paths point inside ~/.claude, so nothing
+  # workspace-relative is ever baked into the installed state, and the fresh checkout is exactly
+  # the source of truth we want them reading.
+  #
+  # install-brain-sync-timer.sh runs from the CANONICAL checkout $HOME/dev/AgentSystem instead.
+  # That script derives REPO_ROOT from its own BASH_SOURCE directory and bakes it into the unit's
+  # `ExecStart=` and `WorkingDirectory=`. Installing it from the runner workspace would write a
+  # unit pointing at a transient path that actions/checkout rewrites on the next run — precisely
+  # the stale-unit failure its own --check exists to catch ("a task pointing at a moved or deleted
+  # checkout, which looks perfectly healthy in systemctl status"). If the canonical checkout is
+  # missing, this job FAILS rather than falling back; a silent fallback is how you install a timer
+  # that reports healthy and never runs. The canonical checkout is READ ONLY here — no fetch, no
+  # pull, no checkout; its branch/HEAD/dirty count are printed as evidence and nothing more.
+  #
+  # The --check invocations, by contrast, all run from the workspace, matching
+  # enforcement-drift-check.yml exactly — so a green AFTER here is a direct prediction that
+  # tomorrow's daily check is green. That is safe because --check asserts the units by MEANING
+  # (the ExecStart script exists on disk, SuccessExitStatus is intact, the timer repeats), not by
+  # byte-equality against the path the caller happens to sit in.
+  #
+  # Note: sync-agents.js writes .agents/sync.log, which is tracked, so this dirties the WORKSPACE
+  # checkout. That is harmless and expected — actions/checkout cleans it on the next run, and
+  # nothing here commits or pushes. Don't go looking for a bug when you see it.
+  repair-install:
+    if: inputs.mode == 'repair-install'
+    runs-on: [self-hosted, Linux]
+    # Read-only token: this job makes no API writes at all. No gh pr/issue calls, no git push.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The runner's service context has no PATH for node (the sibling jobs' bare `node` calls only
+      # work by luck of the current install). Resolve it absolutely, same pattern as
+      # enforcement-drift-check.yml.
+      - name: Resolve node's absolute path for the runner service context
+        id: tools
+        shell: bash
+        run: |
+          resolve() {
+            local name="$1"; shift
+            local c
+            for c in "$@"; do [ -x "$c" ] && { echo "$c"; return; }; done
+            command -v "$name" 2>/dev/null || true
+          }
+          NODE_PATH=$(resolve node "$HOME/.nvm/versions/node/*/bin/node" /usr/bin/node /usr/local/bin/node)
+          echo "Resolved node: $NODE_PATH"
+          echo "node_path=$NODE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight — locate the canonical checkout, refuse to guess
+        id: pre
+        shell: bash
+        run: |
+          set -uo pipefail
+          NODE='${{ steps.tools.outputs.node_path }}'
+          if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then
+            echo "::error::could not resolve a node binary on this runner; every step below needs one"
+            exit 1
+          fi
+
+          CANON="$HOME/dev/AgentSystem"
+          if [ ! -f "$CANON/tools/brain-sync-run.js" ]; then
+            echo "::error::$CANON/tools/brain-sync-run.js is missing, so the canonical checkout is not usable. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace: that path is rewritten by actions/checkout, and the resulting unit would point at a directory that no longer exists while still looking healthy in systemctl status. Restore or re-clone $CANON on this host, then re-dispatch repair-install."
+            exit 1
+          fi
+
+          echo "canon_root=$CANON" >> "$GITHUB_OUTPUT"
+          echo "node:              $NODE"
+          echo "workspace:         $GITHUB_WORKSPACE   (source for deploy-hooks + sync-agents)"
+          echo "canonical repo:    $CANON   (source for the systemd unit; read only)"
+          echo "canon branch:      $(git -C "$CANON" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+          echo "canon HEAD:        $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null || echo '?')"
+          echo "canon dirty paths: $(git -C "$CANON" status --porcelain 2>/dev/null | wc -l)"
+          echo "(the canonical checkout is not modified by this job: no fetch, no pull, no checkout)"
+
+      # ── BEFORE ───────────────────────────────────────────────────────────────────────────────
+      # Nothing here may fail the job. The whole point is to photograph the drift that the repair
+      # is about to fix, so an exit code from a --check tool is data, not an error.
+      - name: BEFORE — fingerprint ~/agent-memory and run all four checks
+        shell: bash
+        run: |
+          # set +e first and deliberately: GitHub invokes this as `bash --noprofile --norc -e -o
+          # pipefail`, and a step's own `set -uo pipefail` does NOT clear that -e. Every --check
+          # below is expected to exit nonzero right now; under the inherited -e the first one would
+          # kill the step and the BEFORE picture would never be printed (tests/workflow_errexit).
+          set +e
+          set -uo pipefail
+          NODE='${{ steps.tools.outputs.node_path }}'
+          WS="$GITHUB_WORKSPACE"
+          BRAIN="$HOME/agent-memory"
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          run() { "$@" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"; return "${PIPESTATUS[0]}"; }
+
+          # Export the user bus if it exists, so the timer check's liveness half is genuinely
+          # evaluated instead of reporting "cannot reach the user systemd bus" and passing.
+          UID_N="$(id -u)"
+          if [ -S "/run/user/$UID_N/bus" ]; then
+            export XDG_RUNTIME_DIR="/run/user/$UID_N"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_N/bus"
+          fi
+
+          out "## repair-install on $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          out ""
+          out "## BEFORE"
+          out ""
+
+          if git -C "$BRAIN" rev-parse HEAD >/dev/null 2>&1; then
+            HEAD_B="$(git -C "$BRAIN" rev-parse HEAD)"
+            DIRTY_B="$(git -C "$BRAIN" status --porcelain | wc -l | tr -d ' ')"
+          else
+            HEAD_B="none"
+            DIRTY_B="n/a"
+          fi
+          echo "BRAIN_HEAD_BEFORE=$HEAD_B" >> "$GITHUB_ENV"
+          echo "BRAIN_DIRTY_BEFORE=$DIRTY_B" >> "$GITHUB_ENV"
+          out '```'
+          out "agent-memory HEAD   $HEAD_B"
+          out "agent-memory dirty  $DIRTY_B path(s)"
+          out "(recorded so the AFTER step can prove this job did not touch the brain)"
+          out '```'
+
+          out ""
+          out "### hooks — node tools/deploy-hooks.js --check --require-install"
+          out '```'
+          run "$NODE" "$WS/tools/deploy-hooks.js" --check --require-install
+          out "exit $?"
+          out '```'
+
+          out ""
+          out "### agents — node tools/sync-agents.js --check"
+          out '```'
+          run "$NODE" "$WS/tools/sync-agents.js" --check
+          out "exit $?"
+          out '```'
+
+          out ""
+          out "### timer — bash tools/install-brain-sync-timer.sh --check"
+          out '```'
+          run bash "$WS/tools/install-brain-sync-timer.sh" --check
+          out "exit $?"
+          out '```'
+
+          out ""
+          out "### routines — node tools/routines.js verify (INFORMATIONAL ONLY, see AFTER)"
+          out '```'
+          run "$NODE" "$WS/tools/routines.js" verify
+          out "exit $?"
+          out '```'
+
+          echo "BEFORE recorded. Nothing has been changed yet."
+          exit 0
+
+      # ── ACTIONS ──────────────────────────────────────────────────────────────────────────────
+      # Each of these three tools is idempotent: on an already-repaired host they report "no
+      # changes" and exit 0, which is what makes a second dispatch of this mode a no-op.
+      - name: ACTIONS — deploy hooks, sync agent defs, install the memory sync timer
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          NODE='${{ steps.tools.outputs.node_path }}'
+          CANON='${{ steps.pre.outputs.canon_root }}'
+          WS="$GITHUB_WORKSPACE"
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          run() { "$@" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"; return "${PIPESTATUS[0]}"; }
+          rc=0
+
+          out ""
+          out "## ACTIONS"
+
+          out ""
+          out "### 1/3 node tools/deploy-hooks.js   (source: workspace)"
+          out '```'
+          run "$NODE" "$WS/tools/deploy-hooks.js"
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::deploy-hooks.js failed with exit $s — hooks were not repaired"
+            rc=1
+          fi
+
+          out ""
+          out "### 2/3 node tools/sync-agents.js    (source: workspace; also writes the tracked .agents/sync.log)"
+          out '```'
+          run "$NODE" "$WS/tools/sync-agents.js"
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::sync-agents.js failed with exit $s — agent definitions were not repaired"
+            rc=1
+          fi
+
+          out ""
+          out "### 3/3 bash tools/install-brain-sync-timer.sh   (source: CANONICAL checkout, not the workspace)"
+          UID_N="$(id -u)"
+          USER_N="$(id -un)"
+          out '```'
+          out "uid / user     $UID_N / $USER_N"
+          out "installing from $CANON  (its path is baked into the unit ExecStart=)"
+
+          # loginctl enable-linger is best effort and is what starts the user manager and creates
+          # /run/user/<uid> in the first place. On a service account that has never logged in
+          # interactively, its absence is usually WHY the bus below is unreachable.
+          if loginctl enable-linger "$USER_N" >/dev/null 2>&1; then
+            out "linger         enabled (or already enabled) for $USER_N"
+          else
+            out "linger         could NOT be enabled — best effort, continuing"
+          fi
+
+          if [ -S "/run/user/$UID_N/bus" ]; then
+            export XDG_RUNTIME_DIR="/run/user/$UID_N"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_N/bus"
+            out "user bus       /run/user/$UID_N/bus is a socket — exported XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS"
+          else
+            out "user bus       /run/user/$UID_N/bus is ABSENT — systemctl --user will not be reachable"
+          fi
+
+          # The unit bakes in whatever `command -v node` resolves to, falling back to /usr/bin/node.
+          # The runner service context has no node on PATH, so without this the ExecStart= would be
+          # written against a path that may not exist: an installed unit that can never run.
+          export PATH="$(dirname "$NODE"):$PATH"
+          out "node for unit  $(command -v node)"
+          out '```'
+          out '```'
+          run bash "$CANON/tools/install-brain-sync-timer.sh"
+          TIMER_RC=$?
+          out "exit $TIMER_RC"
+          out '```'
+          echo "TIMER_RC=$TIMER_RC" >> "$GITHUB_ENV"
+          echo "TIMER_USER=$USER_N" >> "$GITHUB_ENV"
+
+          # Contract (tools/install-brain-sync-timer.sh header): 0 = units written AND the timer is
+          # enabled and active. 4 = units written but the user bus was unreachable or `enable --now`
+          # failed, so the timer is NOT running and only a human at a console can finish it.
+          # Anything else = the units could not even be written.
+          case "$TIMER_RC" in
+            0)
+              out ""
+              out "timer installed and enabled. The AFTER step verifies it with --check, whose"
+              out "liveness half must also pass."
+              ;;
+            4)
+              out ""
+              out "TIMER NOT RUNNING (exit 4). The units are on disk but were never enabled."
+              out "The AFTER step proves the units landed with --check-units and then FAILS this job."
+              ;;
+            *)
+              echo "::error::install-brain-sync-timer.sh exited $TIMER_RC — the units could not be written at all"
+              rc=1
+              ;;
+          esac
+
+          exit "$rc"
+
+      # ── AFTER + VERDICT ──────────────────────────────────────────────────────────────────────
+      #
+      # Gated on the three things this mode actually repairs. `routines.js verify` runs too, but is
+      # reported as INFORMATIONAL and does not gate: a routines/workflow mismatch is a repo-side
+      # code change (an entry in config/routines.yml against a job in scheduled-tasks.yml), and
+      # nothing this job runs on the host can fix one. Gating on it would leave repair-install
+      # permanently red for a reason it is structurally unable to address, and a mode that is
+      # always red is a mode nobody reads.
+      - name: AFTER — re-run all four checks, prove the brain is untouched, then verdict
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          NODE='${{ steps.tools.outputs.node_path }}'
+          WS="$GITHUB_WORKSPACE"
+          BRAIN="$HOME/agent-memory"
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          run() { "$@" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"; return "${PIPESTATUS[0]}"; }
+          gate=0
+
+          UID_N="$(id -u)"
+          if [ -S "/run/user/$UID_N/bus" ]; then
+            export XDG_RUNTIME_DIR="/run/user/$UID_N"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_N/bus"
+          fi
+
+          out ""
+          out "## AFTER"
+
+          out ""
+          out "### hooks — node tools/deploy-hooks.js --check --require-install   [GATING]"
+          out '```'
+          run "$NODE" "$WS/tools/deploy-hooks.js" --check --require-install
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::hook drift is STILL present after running deploy-hooks.js"
+            gate=1
+          fi
+
+          out ""
+          out "### agents — node tools/sync-agents.js --check   [GATING]"
+          out '```'
+          run "$NODE" "$WS/tools/sync-agents.js" --check
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::agent definition drift is STILL present after running sync-agents.js"
+            gate=1
+          fi
+
+          out ""
+          out "### timer — bash tools/install-brain-sync-timer.sh --check   [GATING]"
+          out '```'
+          run bash "$WS/tools/install-brain-sync-timer.sh" --check
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::brain-sync timer drift is STILL present after running the installer"
+            gate=1
+          fi
+
+          # Exit 4 from the installer means the units exist but nothing enabled them. Prove the
+          # units really landed (--check-units skips the liveness half), then fail anyway. Reporting
+          # success for a timer that is not scheduled is the exact false-green this mode exists to
+          # end: on the host that matters, the 15-minute timer is the ONLY thing syncing the brain.
+          if [ "${TIMER_RC:-0}" = "4" ]; then
+            out ""
+            out "### timer units on disk — --check-units (liveness half skipped)"
+            out '```'
+            run bash "$WS/tools/install-brain-sync-timer.sh" --check-units
+            u=$?
+            out "exit $u"
+            out '```'
+            if [ "$u" -ne 0 ]; then
+              echo "::error::install-brain-sync-timer.sh exited 4 AND the units are not on disk — it wrote nothing usable"
+            fi
+            gate=1
+            echo "::error::the memory sync timer is NOT running. The units were written to ~/.config/systemd/user/brain-sync.{service,timer} but the systemd --user bus was unreachable from the runner service context, so enable --now never happened. A human must run this at a console on $(hostname) as ${TIMER_USER:-the runner user}: loginctl enable-linger ${TIMER_USER:-<user>} && systemctl --user daemon-reload && systemctl --user enable --now brain-sync.timer"
+            out ""
+            out "HUMAN ACTION REQUIRED — run this at a console on $(hostname) as ${TIMER_USER:-the runner user}:"
+            out '```'
+            out "loginctl enable-linger ${TIMER_USER:-<user>} && systemctl --user daemon-reload && systemctl --user enable --now brain-sync.timer"
+            out '```'
+          fi
+
+          out ""
+          out "### routines — node tools/routines.js verify   [INFORMATIONAL ONLY — does not gate]"
+          out "repair-install cannot fix a routines/workflow mismatch; that is a repo-side code change."
+          out '```'
+          run "$NODE" "$WS/tools/routines.js" verify
+          s=$?
+          out "exit $s   (not gating)"
+          out '```'
+
+          out ""
+          out "### ~/agent-memory was not touched"
+          if git -C "$BRAIN" rev-parse HEAD >/dev/null 2>&1; then
+            HEAD_A="$(git -C "$BRAIN" rev-parse HEAD)"
+            DIRTY_A="$(git -C "$BRAIN" status --porcelain | wc -l | tr -d ' ')"
+          else
+            HEAD_A="none"
+            DIRTY_A="n/a"
+          fi
+          out '```'
+          out "HEAD  before ${BRAIN_HEAD_BEFORE:-<not recorded>}"
+          out "HEAD  after  $HEAD_A"
+          out "dirty before ${BRAIN_DIRTY_BEFORE:-<not recorded>}"
+          out "dirty after  $DIRTY_A"
+          out '```'
+          # No step in this job writes, commits, syncs or pushes the brain. But one thing it does is
+          # `systemctl --user enable --now brain-sync.timer`, and that timer carries OnBootSec=2min
+          # against a host booted long ago — so systemd elapses it AT ONCE and brain-sync-run.js
+          # commits and pushes while this job is still running. On the successful repair path a
+          # moved HEAD is therefore the expected outcome, not an anomaly.
+          #
+          # Gating on it would make the first successful repair-install — the dispatch this mode was
+          # built for — go red for working correctly, and a mode that is red when it succeeds gets
+          # its failures ignored. So: always print the commits, and gate only when TIMER_RC != 0,
+          # i.e. when no timer was enabled and no benign mover exists.
+          if [ "${BRAIN_HEAD_BEFORE:-}" != "$HEAD_A" ]; then
+            out ""
+            out "commits that landed while this job ran:"
+            out '```'
+            git -C "$BRAIN" log --oneline "${BRAIN_HEAD_BEFORE:-HEAD}..$HEAD_A" 2>&1 | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
+            out '```'
+            if [ "${TIMER_RC:-0}" = "0" ]; then
+              out "EXPECTED: the timer this job enabled elapsed immediately (OnBootSec=2min, host booted long ago) and ran its first sync. Not a failure."
+            else
+              gate=1
+              echo "::error::~/agent-memory HEAD moved during this job (${BRAIN_HEAD_BEFORE:-?} -> $HEAD_A) and TIMER_RC=${TIMER_RC:-?}, so the brain-sync timer was NOT enabled and cannot account for it. Nothing in this job writes the brain. Explain the commits above before trusting this run."
+            fi
+          fi
+
+          out ""
+          if [ "$gate" -eq 0 ]; then
+            out "## VERDICT: PASS — hooks, agent definitions and the memory sync timer are all in sync on $(hostname). This job wrote nothing into ~/agent-memory; if its HEAD moved, the block above names the commits and the timer that produced them."
+          else
+            out "## VERDICT: FAIL — see the ::error:: annotations above. Re-read BEFORE vs AFTER to see what the repair did and did not move."
+          fi
+          exit "$gate"

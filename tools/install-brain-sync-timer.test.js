@@ -9,9 +9,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -29,6 +29,24 @@ function run(args, configHome, env = {}) {
 }
 
 const scratch = () => mkdtempSync(join(tmpdir(), 'timer-check-'));
+
+// Fake `systemctl`/`loginctl` on PATH so the install branch can be driven both ways (bus up, bus
+// down) without a real systemd anywhere — including on Windows Git Bash, where neither binary
+// exists at all. `exitCode` is what every invocation of that fake returns.
+function fakeBin({ systemctl, loginctl } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'timer-fakebin-'));
+  const write = (name, exitCode) => {
+    const p = join(dir, name);
+    // Emits on stderr so a test can assert the installer SURFACES systemd's own words rather than
+    // swallowing them. The target host refuses ssh, so this text is the only diagnostic that will
+    // ever exist — and "Failed to connect to bus" needs a different fix from a masked unit.
+    writeFileSync(p, `#!/usr/bin/env bash\necho "FAKE-SYSTEMD-BUS-ERROR: ${name} $*" >&2\nexit ${exitCode}\n`);
+    chmodSync(p, 0o755);
+  };
+  if (systemctl !== undefined) write('systemctl', systemctl);
+  if (loginctl !== undefined) write('loginctl', loginctl);
+  return dir;
+}
 
 /** A unit pair that should pass --check: real script path, conflict exit code, repeat interval. */
 function installUnits(configHome, { execScript = join(HERE, 'brain-sync-run.js'), successLine = 'SuccessExitStatus=0 3', interval = 'OnUnitActiveSec=15min' } = {}) {
@@ -167,4 +185,65 @@ test('--uninstall leaves no units behind', { skip: !hasBash }, () => {
   const r = run(['--uninstall'], home);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(readdirSync(dir), []);
+});
+
+// install degrading honestly when the systemd --user bus is unreachable (#352 repair-install
+// worker codes against this exit-4 contract). Real-world case: the Mission Control runner, where
+// `systemctl --user` errors out in a service-account session with no D-Bus — exactly the drift
+// report this whole change is answering (units missing, "cannot reach the user systemd bus").
+test('install writes units but exits 4 when the systemd bus is unreachable', { skip: !hasBash }, () => {
+  const home = scratch();
+  const bin = fakeBin({ systemctl: 1, loginctl: 1 });
+  const r = run(['install'], home, { PATH: `${bin}${delimiter}${process.env.PATH}` });
+
+  assert.equal(r.status, 4, `expected exit 4 (bus unreachable), got ${r.status}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
+
+  const dir = join(home, 'systemd', 'user');
+  assert.ok(existsSync(join(dir, 'brain-sync.service')), 'service unit was not written to disk');
+  assert.ok(existsSync(join(dir, 'brain-sync.timer')), 'timer unit was not written to disk');
+
+  const out = r.stdout + r.stderr;
+  assert.match(out, /systemctl --user enable --now brain-sync\.timer/,
+    'must name the exact command a human needs to run at a console');
+  assert.doesNotMatch(out, /^installed:/m,
+    'a bare "installed:" success line on a bus-down install is the false-green this exists to prevent');
+  assert.match(out, /FAKE-SYSTEMD-BUS-ERROR/,
+    "systemd's own error text must reach the log — ssh to this host is refused, so an opaque exit 4 "
+    + 'cannot be told apart from a masked unit or a unit systemd rejected at load');
+});
+
+test('install succeeds and reports enabled when the systemd bus is reachable', { skip: !hasBash }, () => {
+  const home = scratch();
+  const bin = fakeBin({ systemctl: 0, loginctl: 0 });
+  const r = run(['install'], home, { PATH: `${bin}${delimiter}${process.env.PATH}` });
+
+  assert.equal(r.status, 0, `expected exit 0 (bus reachable), got ${r.status}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
+
+  const dir = join(home, 'systemd', 'user');
+  assert.ok(existsSync(join(dir, 'brain-sync.service')));
+  assert.ok(existsSync(join(dir, 'brain-sync.timer')));
+  assert.match(r.stdout, /installed:/, 'a healthy install should say so');
+
+  const check = run(['--check-units'], home, { PATH: `${bin}${delimiter}${process.env.PATH}` });
+  assert.equal(check.status, 0, `--check-units disagreed with a fresh install:\n${check.stdout}`);
+});
+
+test('install is idempotent when the systemd bus is reachable', { skip: !hasBash }, () => {
+  const home = scratch();
+  const bin = fakeBin({ systemctl: 0, loginctl: 0 });
+  const env = { PATH: `${bin}${delimiter}${process.env.PATH}` };
+
+  const first = run(['install'], home, env);
+  assert.equal(first.status, 0, first.stderr);
+  const dir = join(home, 'systemd', 'user');
+  const svc1 = readFileSync(join(dir, 'brain-sync.service'), 'utf8');
+  const tmr1 = readFileSync(join(dir, 'brain-sync.timer'), 'utf8');
+
+  const second = run(['install'], home, env);
+  assert.equal(second.status, 0, second.stderr);
+  const svc2 = readFileSync(join(dir, 'brain-sync.service'), 'utf8');
+  const tmr2 = readFileSync(join(dir, 'brain-sync.timer'), 'utf8');
+
+  assert.equal(svc1, svc2, 'service unit content changed across a re-install with nothing else different');
+  assert.equal(tmr1, tmr2, 'timer unit content changed across a re-install with nothing else different');
 });
