@@ -1,0 +1,95 @@
+name: Workflow Lint
+
+# Fail when a file in .github/workflows/ is unloadable or invalid.
+#
+# Why this exists (#293): GitHub does NOT surface an unloadable workflow as a failing check —
+# it omits the check from the run list entirely. There is no red X, no annotation, nothing in
+# `gh pr checks`. pr-linked-issue-check.yml shipped in #275 with a line at column 0 inside a
+# `script: |` block, which ended the YAML block scalar early and made the file unparseable. It
+# then sat there for weeks looking like a working required gate while executing exactly zero
+# times (#286). A check that cannot load is worse than no check: it looks like coverage.
+#
+# Two layers, because neither one covers the other:
+#
+#   1. actionlint — schema, expressions, runner labels, action inputs, YAML syntax. Catches the
+#      #275 defect outright ("could not parse as YAML: could not find expected ':'").
+#   2. tools/workflow-lint.js — the contents of `script:` blocks. To actionlint a `script:` body
+#      is an opaque string, so a block that is syntactically invalid JavaScript passes the schema
+#      and throws SyntaxError at runtime, possibly only on a rare event.
+#
+# Layer 2 is a committed, tested tool rather than an inline `run:` blob on purpose. An inline
+# blob in a workflow is itself validated by nothing, which would recreate this exact defect one
+# level up.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - '.github/workflows/**'
+      - 'tools/workflow-lint.js'
+      - 'tools/workflow-lint.test.js'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - '.github/workflows/**'
+      - 'tools/workflow-lint.js'
+      - 'tools/workflow-lint.test.js'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Workflow files must be loadable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # Pinned to an exact version, not a floating tag, and verified by checksum. A linter that
+      # silently changes version underneath a required check is its own supply-chain and
+      # reproducibility problem: a new release can turn a green gate red with no repo change.
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install actionlint ${{ env.ACTIONLINT_VERSION }}
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          curl -fsSL --retry 3 -o "$tarball" "$url"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum --check --strict -
+          tar -xzf "$tarball" actionlint
+          ./actionlint --version
+
+      # Layer 1: schema, expressions, and YAML syntax.
+      #
+      # shellcheck integration is off (`-shellcheck=`). It is preinstalled on ubuntu runners, so
+      # leaving it on would fold a pile of pre-existing SC2086/SC2001 style findings in unrelated
+      # workflows into this gate, and the gate would land red for reasons that have nothing to do
+      # with loadability. Those findings are real and tracked separately; turning shellcheck on
+      # is a follow-up once they are cleared, not a silent scope expansion here.
+      - name: actionlint
+        run: ./actionlint -no-color -oneline -shellcheck= -pyflakes=
+
+      # Layer 2: the JavaScript inside every `script:` block.
+      - name: 'Validate embedded script: bodies'
+        run: node tools/workflow-lint.js
+
+      # The tool is only worth anything if its own failing fixtures still fail. This is the step
+      # that proves the gate is not a paper check — it runs the pre-#286 broken workflow through
+      # the linter and asserts it is rejected.
+      - name: Test the linter itself
+        run: node --test tools/workflow-lint.test.js

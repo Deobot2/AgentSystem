@@ -104,3 +104,45 @@ PRs labelled `spec` are exempt (design/discussion, not merged code). An unlinked
 one-time bot comment explaining how to link it, and the check fails (`exit 1`) until it is
 linked or labelled `spec`. It is not currently in the `Required status checks` list above —
 add it there if it should block merges rather than just flag them.
+
+## Workflow lint (#293)
+
+`workflow-lint.yml` fails when a file in `.github/workflows/` is unloadable or invalid.
+
+**Why it exists.** GitHub does not surface an unloadable workflow as a failing check — it omits
+the check from the list entirely. No red X, no annotation, nothing in `gh pr checks`.
+`pr-linked-issue-check.yml` shipped in #275 with a line at column 0 inside a `script: |` block,
+which ended the YAML block scalar early and made the file unparseable. It then sat for weeks
+looking like a working required gate while executing zero times (#286). A required check that
+cannot load is worse than no check: it looks like coverage and provides none.
+
+Two layers, neither of which covers the other:
+
+| Layer | Catches | Does not catch |
+|-------|---------|----------------|
+| `actionlint` (pinned v1.7.12, sha256-verified) | YAML syntax, schema, expressions, runner labels, action inputs | anything inside a `script:` body — to it that is an opaque string |
+| `node tools/workflow-lint.js` | invalid JavaScript in every `script:` block; a conservative YAML structure check | schema and expression errors |
+
+Run either locally:
+
+```bash
+node tools/workflow-lint.js                 # all workflows; exit 1 on findings
+node tools/workflow-lint.js path/to.yml     # one file
+node --test tools/workflow-lint.test.js     # also runs under npm test
+```
+
+Two things to know before changing the linter:
+
+- **Do not swap `AsyncFunction` for `node --check`.** A github-script body is an async *function
+  body*, so top-level `await` and top-level `return` are both legal. `node --check` parses a whole
+  module and rejects one or the other depending on mode — ESM rejects `return`, CJS rejects
+  `await`. There is no mode that accepts both. `tools/workflow-lint.test.js` asserts this.
+- **`tools/**` is Node-builtins-only**, so there is no `js-yaml`. Block scalars are extracted by
+  applying the indentation rule directly: a block scalar ends at the first non-empty line indented
+  less than the block's own indent. That is the rule #275 violated, so implementing it here is the
+  check, not a workaround.
+
+actionlint's `shellcheck` and `pyflakes` integrations are disabled (`-shellcheck= -pyflakes=`).
+shellcheck is preinstalled on ubuntu runners and reports pre-existing SC2086/SC2001 style findings
+in unrelated workflows; folding those into this gate would make it land red for reasons unrelated
+to loadability. Enabling it is a follow-up once those are cleared.
