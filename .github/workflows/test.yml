@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: '22'
 
-      # node --test globs its args (Node >=22). Quoted so node expands, not bash.
+      # Run the exact command a developer runs. This step used to carry its own glob list,
+      # which drifted from package.json and silently orphaned 10 test files from CI -- the
+      # reason a dead workflow (#275) shipped past a green build. One source of truth now:
+      # if a test runs locally it runs here, and adding a test file needs no CI edit.
       - name: Run all tests
-        run: node --test "tests/test_*.js" "tools/*.test.js" "tools/mission-control/*.test.js" "tools/graph/*.test.js" "hooks/*.test.js"
+        run: npm test
