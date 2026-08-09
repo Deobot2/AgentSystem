@@ -144,6 +144,23 @@ by markers in `~/.claude/cache/session-autorename/`. Results land in
 `~/agent-memory/nexus/session-autorename.log`; the worker verifies the registry actually changed
 rather than trusting exit code 0.
 
+**This is a deliberate reversal of #158, and #158 never said so (#307).** #158 closed
+(commit `1124f95`, 2026-07-06) on the acceptance criterion "zero claude/model invocations in
+SessionStart/SessionEnd/rename paths," with a pure-string `<repo> - <slug> - <YYMMDD-HHmm> -
+<status>` format. Three weeks later, PR #193 / commit `5a2d59c` (2026-07-26) added the headless
+`claude -p` call described above — replacing the deterministic slug with a model-written
+4-word summary — because the actual ask ("call `/rename-session` from the SessionEnd hook") needs
+a natural-language read of the transcript that string ops can't produce; `rename_session` itself
+errors "not supported in this context" outside a live session, so reproducing its steps headlessly
+was the only way to get an equivalent name. That tradeoff is sound — the log
+(`~/agent-memory/nexus/session-autorename.log`) shows real 4-word summaries like
+`"validated engineering skill patterns"` that a slug-only scheme cannot produce — but PR #193
+never linked #158 or recorded that it was knowingly overriding that closed issue's criterion, so
+the guarantee kept reading as live after it no longer was. **Cost per rename:** one Haiku
+(`claude-haiku-4-5-20251001`) call, `--max-turns 1`, `--tools ""`, digest capped at 6000 chars
+(≈1,500 input tokens) plus a one-line JSON reply — a few hundredths of a cent, once per session
+close, not per turn.
+
 ## Is-main checks
 
 **Never hand-roll "am I the entry point?".** Use:
