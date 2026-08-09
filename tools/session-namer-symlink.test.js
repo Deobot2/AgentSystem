@@ -21,6 +21,27 @@ import { fileURLToPath } from 'node:url';
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
+// Creating a directory symlink on Windows needs Developer Mode or an elevated shell; without
+// either, symlinkSync throws EPERM. This probe is a capability check, not a platform check, so the
+// symlink tests below run for real on Linux CI (and on any Windows host that can make symlinks)
+// and only stand down where the OS refuses.
+function canSymlinkDirs() {
+  const probe = mkdtempSync(join(tmpdir(), 'symlink-probe-'));
+  try {
+    mkdirSync(join(probe, 'target'));
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+const CAN_SYMLINK = canSymlinkDirs();
+const NO_SYMLINK_REASON =
+  'cannot create directory symlinks on this host (Windows without Developer Mode/admin); ' +
+  'the symlinked-invocation regression is still covered on Linux CI';
+
 const SESSION_ID = 'ffeeddccbbaa9988';
 const ENTRY = {
   session: SESSION_ID,
@@ -44,9 +65,13 @@ before(() => {
   registryPath = join(nexusDir, 'session-registry.jsonl');
   writeFileSync(registryPath, `${JSON.stringify(ENTRY)}\n`);
 
-  const linkDir = join(sandbox, 'linked-tools');
-  symlinkSync(TOOLS_DIR, linkDir, 'dir');
-  linkedTool = join(linkDir, 'session-namer.js');
+  // Guarded: an unguarded throw here would take down the whole file, including the
+  // direct-path test below, which needs no symlink at all.
+  if (CAN_SYMLINK) {
+    const linkDir = join(sandbox, 'linked-tools');
+    symlinkSync(TOOLS_DIR, linkDir, 'dir');
+    linkedTool = join(linkDir, 'session-namer.js');
+  }
 });
 
 after(() => {
@@ -66,13 +91,15 @@ function readRegistry() {
     .split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
-test('--list produces output when invoked through a symlinked directory', () => {
+test('--list produces output when invoked through a symlinked directory', (t) => {
+  if (!CAN_SYMLINK) return t.skip(NO_SYMLINK_REASON);
   const out = runVia(linkedTool, ['--list', '--limit=5']);
   assert.ok(out.trim().length > 0, 'symlinked invocation printed nothing — main() did not run');
   assert.match(out, /original-name/);
 });
 
-test('--auto-rename actually writes the registry through a symlinked path', () => {
+test('--auto-rename actually writes the registry through a symlinked path', (t) => {
+  if (!CAN_SYMLINK) return t.skip(NO_SYMLINK_REASON);
   writeFileSync(registryPath, `${JSON.stringify(ENTRY)}\n`);
   runVia(linkedTool, ['--auto-rename', SESSION_ID, 'renamed via symlink', '--status=done']);
 

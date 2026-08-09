@@ -424,6 +424,12 @@ test('GET /memory/search query structure', async (t) => {
 // process resident. A fake slow `claude` reproduces that shape in 3s.
 
 test('/sessions serves a cached roster instead of shelling out per request', async (t) => {
+  // The slow-CLI stand-in below is a `#!/bin/sh` script handed to the server as CLAUDE_BIN.
+  // Windows has no shebang resolution, so the spawn fails outright and the roster is empty —
+  // the caching behaviour under test is never exercised either way. Runs for real on Linux CI.
+  if (process.platform === 'win32') {
+    return t.skip('the slow-CLI stand-in is a #!/bin/sh script; POSIX hosts only');
+  }
   const tmp = mkdtempSync(path.join(tmpdir(), 'mc-sessions-'));
   const fakeClaude = path.join(tmp, 'claude');
   writeFileSync(fakeClaude, '#!/bin/sh\nsleep 3\necho \'[{"id":"aaaa1111","cwd":"/tmp","kind":"background"}]\'\n');

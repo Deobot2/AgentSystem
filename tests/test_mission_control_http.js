@@ -86,7 +86,11 @@ test.before(async () => {
     '--allow-empty', '-m', 'seed'], { cwd: home });
 
   proc = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, HOME: home, PORT: String(PORT), HOST: '127.0.0.1' },
+    // USERPROFILE as well as HOME: the server resolves its key file from os.homedir(), which on
+    // win32 reads USERPROFILE and ignores HOME entirely. Setting only HOME sent the server to the
+    // developer's real ~/.claude/remote-webhook.key, so every Bearer test-key request 401'd and the
+    // failed-auth lockout tripped before the suite could even reach waitForReady().
+    env: { ...process.env, HOME: home, USERPROFILE: home, PORT: String(PORT), HOST: '127.0.0.1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout.on('data', () => {});
@@ -96,7 +100,17 @@ test.before(async () => {
 
 test.after(() => {
   proc?.kill('SIGKILL');
-  if (home) rmSync(home, { recursive: true, force: true });
+  // Windows releases a killed process's file handles asynchronously, so an immediate rm of the
+  // throwaway HOME races it and throws EPERM — turning a fully-passing suite red in teardown.
+  // maxRetries/retryDelay is Node's own answer to exactly that; and if the OS still will not let
+  // go, a leaked temp dir is a housekeeping problem, not a test failure.
+  if (home) {
+    try {
+      rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch (err) {
+      console.warn(`[teardown] could not remove ${home}: ${err.code || err.message}`);
+    }
+  }
 });
 
 test('unauthenticated request is rejected', async () => {

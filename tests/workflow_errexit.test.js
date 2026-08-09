@@ -39,7 +39,10 @@ const GUARDED_STEPS = [
 
 // Pull the body of a step's `run: |` block: everything indented past the block's own margin.
 function extractRun(file, stepName) {
-  const src = fs.readFileSync(path.join(WF_DIR, file), 'utf8');
+  // Normalise CRLF: on a Windows checkout with core.autocrlf=true these files land with \r\n, and
+  // every `\n`-anchored match below (`run: \|\n`, the body split) silently misses. The step is
+  // fine; only the parse was platform-dependent.
+  const src = fs.readFileSync(path.join(WF_DIR, file), 'utf8').replace(/\r\n/g, '\n');
   const start = src.indexOf(`- name: ${stepName}`);
   assert.notStrictEqual(start, -1, `${file}: no step named "${stepName}" — the parse is stale`);
   const rest = src.slice(start);

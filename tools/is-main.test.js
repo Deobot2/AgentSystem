@@ -18,11 +18,36 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSyn
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMainModule } from './is-main.js';
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(TOOLS_DIR, '..');
+
+// The generated fixtures below `import` is-main.js by absolute path. An ESM specifier must be a
+// file:// URL, not a bare OS path: on Windows `C:\...` is read as the URL scheme `c:` and the
+// loader throws ERR_UNSUPPORTED_ESM_URL_SCHEME before the test's own assertion is reached.
+const IS_MAIN_SPECIFIER = JSON.stringify(pathToFileURL(join(TOOLS_DIR, 'is-main.js')).href);
+
+// Creating a directory symlink on Windows needs Developer Mode or an elevated shell; without
+// either, symlinkSync throws EPERM. Probe once rather than assuming, so the guard narrows to the
+// actual missing capability instead of to the platform.
+function canSymlinkDirs() {
+  const probe = mkdtempSync(join(tmpdir(), 'symlink-probe-'));
+  try {
+    mkdirSync(join(probe, 'target'));
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+const CAN_SYMLINK = canSymlinkDirs();
+const NO_SYMLINK_REASON =
+  'cannot create directory symlinks on this host (Windows without Developer Mode/admin); ' +
+  'the symlink-resolution guarantee is still covered on Linux CI';
 
 test('isMainModule is false when the module is merely imported', () => {
   // This test file is the entry point, not is-main.js, and not the caller's module.
@@ -34,7 +59,7 @@ test('isMainModule is true for the process entry point, reached directly', () =>
   try {
     const tool = join(sandbox, 'tool.mjs');
     writeFileSync(tool, [
-      `import { isMainModule } from ${JSON.stringify(join(TOOLS_DIR, 'is-main.js'))};`,
+      `import { isMainModule } from ${IS_MAIN_SPECIFIER};`,
       'process.stdout.write(isMainModule(import.meta.url) ? "MAIN" : "NOT_MAIN");',
     ].join('\n'));
     const out = execFileSync(process.execPath, [tool], { encoding: 'utf8' });
@@ -44,7 +69,8 @@ test('isMainModule is true for the process entry point, reached directly', () =>
   }
 });
 
-test('isMainModule is true when the entry point is reached through a symlinked dir', () => {
+test('isMainModule is true when the entry point is reached through a symlinked dir', (t) => {
+  if (!CAN_SYMLINK) return t.skip(NO_SYMLINK_REASON);
   // This is the production shape: ~/dev/AgentSystem is a symlink to the real checkout, so
   // argv[1] is the symlink path while import.meta.url is already resolved.
   const sandbox = mkdtempSync(join(tmpdir(), 'is-main-symlink-'));
@@ -53,7 +79,7 @@ test('isMainModule is true when the entry point is reached through a symlinked d
     mkdirSync(real);
     const tool = join(real, 'tool.mjs');
     writeFileSync(tool, [
-      `import { isMainModule } from ${JSON.stringify(join(TOOLS_DIR, 'is-main.js'))};`,
+      `import { isMainModule } from ${IS_MAIN_SPECIFIER};`,
       'process.stdout.write(isMainModule(import.meta.url) ? "MAIN" : "NOT_MAIN");',
     ].join('\n'));
 

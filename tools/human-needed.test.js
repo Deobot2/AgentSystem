@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,23 @@ import {
 } from './human-needed.js';
 
 const TOOL = join(dirname(fileURLToPath(import.meta.url)), 'human-needed.js');
+
+// Creating a directory symlink on Windows needs Developer Mode or an elevated shell; without
+// either, symlinkSync throws EPERM. Probe the capability rather than the platform, so the guard
+// lifts by itself the moment the host can do it.
+function canSymlinkDirs() {
+  const probe = mkdtempSync(join(tmpdir(), 'symlink-probe-'));
+  try {
+    mkdirSync(join(probe, 'target'));
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+const CAN_SYMLINK = canSymlinkDirs();
 
 test('markerFor embeds the key in an HTML comment', () => {
   assert.equal(markerFor('daily-triage-skill-missing'), '<!-- human-needed:key=daily-triage-skill-missing -->');
@@ -139,7 +156,11 @@ test('CLI --dry-run raises nothing and exits 0', () => {
   assert.match(r.stdout, /human-needed:key=test-key/);
 });
 
-test('CLI runs main() when invoked through a symlinked path', () => {
+test('CLI runs main() when invoked through a symlinked path', (t) => {
+  if (!CAN_SYMLINK) {
+    return t.skip('cannot create directory symlinks on this host (Windows without Developer ' +
+      'Mode/admin); the symlinked-invocation guarantee is still covered on Linux CI');
+  }
   // The whole point of tools/is-main.js. A new tool that fails this is a silent no-op in prod.
   const sandbox = mkdtempSync(join(tmpdir(), 'hn-symlink-'));
   try {

@@ -67,7 +67,14 @@ test('a harness failure surfaces its real cause instead of a masked spawn error'
   );
 });
 
-test('an agy dispatch reaches the real harness and reports a live pid', async () => {
+test('an agy dispatch reaches the real harness and reports a live pid', async (t) => {
+  // The fixtures above are `#!/bin/sh` scripts placed on PATH with a `:` separator — both are
+  // POSIX-only. Windows has no shebang resolution and splits PATH on `;`, so the spawn can never
+  // reach the fake `agy` here. The dispatcher itself is not implicated, and this runs for real on
+  // Linux CI, which is also the only place the agy harness is deployed.
+  if (process.platform === 'win32') {
+    return t.skip('fixtures are #!/bin/sh scripts on a `:`-separated PATH; POSIX hosts only');
+  }
   const repoPath = mkdtempSync(join(tmpdir(), 'agy-repo-'));
   const result = await mod.spawnAgyPersistent('do a thing', repoPath, 'gemini-3-pro', 'leo');
   spawnedPids.push(result.pid);
