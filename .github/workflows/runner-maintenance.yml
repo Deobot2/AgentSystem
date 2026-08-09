@@ -1,0 +1,390 @@
+# runner-maintenance.yml — hands-on maintenance for the self-hosted runner's host state, from a
+# dispatch instead of a shell.
+#
+# ── Why this workflow exists ─────────────────────────────────────────────────────────────────
+#
+# `ssh 100.82.195.75` is refused (port 22, Connection refused), so there is no interactive path to
+# the box that holds ~/agent-memory, ~/.claude and the merge gate. The runner does execute every
+# job dispatched to it, which is a remote-execution channel this repo already trusts and is the
+# only one available. This file is that channel, deliberately narrowed.
+#
+# ── Why the input is `type: choice` and never a string ───────────────────────────────────────
+#
+# Every step below runs privileged commands on the host that also runs sam-audit.yml, the hard
+# gate on merges to main. A free-form string input would be arbitrary remote code execution on the
+# machine that decides what gets merged: anyone able to dispatch a workflow could run anything as
+# the runner user. A closed choice list means the only thing a dispatcher chooses is WHICH of
+# three reviewed scripts runs, and the scripts themselves are reviewed in this file.
+#
+# ── Why there is no `schedule:` ──────────────────────────────────────────────────────────────
+#
+# workflow_dispatch ONLY. config/routines.yml requires every `mechanism: cron` routine to have a
+# matching job in scheduled-tasks.yml with the same cron expression, and `node tools/routines.js
+# verify` exits 1 on a mismatch. A dispatch-only maintenance workflow is not a routine and must
+# not quietly become one. Repair is also not a thing that should happen unattended — a human
+# reads `status` first and decides.
+#
+# ── Why there is no `paths:` filter ──────────────────────────────────────────────────────────
+#
+# Nothing here is or could become a required status check, and #316 is the reason the question is
+# even worth answering: an ABSENT check is not a failing one — GitHub leaves it permanently
+# pending, the PR becomes unmergeable, and `enforce_admins: true` leaves no override.
+
+name: Runner Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to do on the runner host'
+        required: true
+        default: status
+        type: choice
+        options:
+          # Read-only. Changes nothing. Always run this first.
+          - status
+          # Reconcile ~/agent-memory, resolve committed conflict markers, rebuild the graphs.
+          - repair-brain
+          # One-time bootstrap of ~/agent-memory/nexus/run-log/ so weekly-trust-scores can run.
+          - bootstrap-run-log
+
+# Two dispatches touching ~/agent-memory at once would produce exactly the half-merged tree this
+# workflow exists to repair.
+concurrency:
+  group: runner-maintenance
+  cancel-in-progress: false
+
+jobs:
+  # ── status ─────────────────────────────────────────────────────────────────────────────────
+  # Read-only by construction. Every command here either reads or reports; none writes to the
+  # brain, and none of them may fail the job — an unknown state must still be reported, because
+  # "the status probe went red" tells a human nothing about the brain.
+  status:
+    if: inputs.mode == 'status'
+    runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the runner's brain state
+        shell: bash
+        run: |
+          set -uo pipefail
+          BRAIN="$HOME/agent-memory"
+          WS="$GITHUB_WORKSPACE"
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+
+          out "## Runner brain status"
+          out ""
+          out '```'
+          out "host          $(hostname)"
+          out "date (UTC)    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          out "brain root    $BRAIN"
+
+          if [ ! -e "$BRAIN" ]; then
+            out "STATE         MISSING — $BRAIN does not exist on this host"
+            out '```'
+            exit 0
+          fi
+
+          if ! git -C "$BRAIN" rev-parse --git-dir >/dev/null 2>&1; then
+            out "STATE         NOT A GIT CHECKOUT — brain-sync.js cannot run here"
+            out '```'
+            exit 0
+          fi
+
+          GITDIR="$(git -C "$BRAIN" rev-parse --absolute-git-dir 2>/dev/null)"
+          BRANCH="$(git -C "$BRAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+          out "branch        $BRANCH"
+          out "HEAD          $(git -C "$BRAIN" log -1 --format='%h %ad %s' --date=iso 2>/dev/null)"
+
+          IN_MERGE=no; [ -f "$GITDIR/MERGE_HEAD" ] && IN_MERGE=YES
+          IN_REBASE=no
+          { [ -d "$GITDIR/rebase-merge" ] || [ -d "$GITDIR/rebase-apply" ]; } && IN_REBASE=YES
+          out "mid-merge     $IN_MERGE"
+          out "mid-rebase    $IN_REBASE"
+
+          # Fetch is read-only with respect to the working tree — it only updates remote refs.
+          if git -C "$BRAIN" fetch --quiet origin 2>/dev/null; then
+            COUNTS="$(git -C "$BRAIN" rev-list --left-right --count "origin/$BRANCH...HEAD" 2>/dev/null || echo '? ?')"
+            out "behind/ahead  $COUNTS   (left = on origin only, right = LOCAL ONLY, exists nowhere else)"
+          else
+            out "behind/ahead  fetch failed — cannot compare with origin"
+          fi
+
+          UNMERGED="$(git -C "$BRAIN" diff --name-only --diff-filter=U 2>/dev/null | wc -l)"
+          DIRTY="$(git -C "$BRAIN" status --porcelain 2>/dev/null | wc -l)"
+          out "dirty paths   $DIRTY"
+          out "unmerged      $UNMERGED"
+          out '```'
+
+          out ""
+          out "### Working tree (first 40 entries of --porcelain)"
+          out '```'
+          git -C "$BRAIN" status --porcelain 2>/dev/null | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          out '```'
+
+          out ""
+          out "### Conflict markers (read-only --check; exit 1 here just means markers exist)"
+          out '```'
+          node "$WS/tools/resolve-brain-markers.js" --root="$BRAIN" --check 2>&1 | tail -60 | tee -a "$GITHUB_STEP_SUMMARY"
+          out '```'
+
+          out ""
+          out "### Brains under nexus/ and whether their graph.json parses"
+          out '```'
+          for dir in "$BRAIN"/nexus/*/; do
+            [ -d "$dir" ] || continue
+            slug="$(basename "${dir%/}")"
+            g="${dir%/}/graph.json"
+            if [ ! -f "$g" ]; then
+              out "$slug — no graph.json"
+            elif node --input-type=module -e 'import {readFileSync} from "node:fs"; const g=JSON.parse(readFileSync(process.argv[1],"utf8")); console.log(`${(g.nodes||[]).length} nodes, ${(g.edges||[]).length} edges`);' "$g" >/tmp/gs 2>/dev/null; then
+              out "$slug — OK — $(cat /tmp/gs)"
+            else
+              out "$slug — UNPARSEABLE graph.json (this is what breaks memory-decay)"
+            fi
+          done
+          out '```'
+
+          out ""
+          out "### run-log (weekly-trust-scores input)"
+          out '```'
+          if [ -d "$BRAIN/nexus/run-log" ]; then
+            out "run-log       EXISTS — $(find "$BRAIN/nexus/run-log" -name '*.json' | wc -l) json file(s)"
+          else
+            out "run-log       MISSING — bootstrap-run-log mode will create it"
+          fi
+          if [ -f "$BRAIN/nexus/trust-scores.md" ]; then
+            out "trust-scores  $(stat -c '%s bytes, mtime %y' "$BRAIN/nexus/trust-scores.md")"
+          else
+            out "trust-scores  missing"
+          fi
+          out '```'
+
+          echo "status mode changed nothing."
+
+  # ── repair-brain ───────────────────────────────────────────────────────────────────────────
+  #
+  # The dangerous one. The runner's ~/agent-memory may hold commits that exist on NO other host —
+  # per-agent decision logs, user preference nodes — and may be sitting mid-merge. So:
+  #
+  #   * tar the whole checkout INCLUDING .git before touching anything, so local commits are
+  #     recoverable even if every later step is wrong;
+  #   * resolve markers BEFORE any `git add`. That inversion is the entire fix: brain-sync.js runs
+  #     `git add -A` before it pulls, so a half-merged tree is just file content to it and markers
+  #     get committed and pushed as data (#344, 128 files);
+  #   * reconcile with `git merge`, which keeps BOTH parents. A merge commit cannot lose a local
+  #     commit; a reset can;
+  #   * verify zero markers remain BEFORE pushing, so this run cannot be the one that publishes
+  #     markers back to origin;
+  #   * on anything that cannot be reconciled losslessly, STOP — raise a human-needed alert and
+  #     exit nonzero. Forcing a resolution is the failure mode, not the fix.
+  #
+  # Banned outright, and absent from this file on purpose: `reset --hard`, `push --force`,
+  # `checkout --theirs`, `clean -fd`. Every one of them can delete a fact that exists nowhere else.
+  repair-brain:
+    if: inputs.mode == 'repair-brain'
+    runs-on: [self-hosted, Linux]
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      ALERT_KEY: runner-brain-repair-blocked
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Back up the whole brain checkout (including .git)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRAIN="$HOME/agent-memory"
+          if [ ! -d "$BRAIN" ]; then
+            echo "::error::$BRAIN does not exist on this host — nothing to repair"
+            exit 1
+          fi
+          mkdir -p "$HOME/agent-memory-backups"
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          BACKUP="$HOME/agent-memory-backups/agent-memory-$STAMP.tar.gz"
+          # .git is included deliberately. The local-only commits are the irreplaceable part, and
+          # a backup of the working tree alone would not restore them.
+          tar -czf "$BACKUP" -C "$HOME" agent-memory
+          echo "BACKUP=$BACKUP" >> "$GITHUB_ENV"
+          echo "backup written to $BACKUP ($(du -h "$BACKUP" | cut -f1))"
+          ls -1t "$HOME/agent-memory-backups" | head -5
+
+      - name: Reconcile, resolve markers, rebuild every graph
+        shell: bash
+        run: |
+          set -uo pipefail
+          BRAIN="$HOME/agent-memory"
+          WS="$GITHUB_WORKSPACE"
+          RESOLVER="$WS/tools/resolve-brain-markers.js"
+          IDENT=(-c user.name='AgentSystem runner-maintenance' -c user.email='runner-maintenance@localhost')
+
+          stop() {
+            echo "::error::$1"
+            echo "STOPPING. Nothing was force-resolved and nothing was pushed."
+            echo "The brain is exactly as this step found it, apart from the marker repairs listed above."
+            echo "Full pre-repair backup (working tree AND .git): ${BACKUP:-<not taken>}"
+            exit 1
+          }
+
+          git -C "$BRAIN" rev-parse --git-dir >/dev/null 2>&1 || stop "$BRAIN is not a git checkout"
+          GITDIR="$(git -C "$BRAIN" rev-parse --absolute-git-dir)"
+          BRANCH="$(git -C "$BRAIN" rev-parse --abbrev-ref HEAD)"
+          [ "$BRANCH" != "HEAD" ] || stop "the brain is on a detached HEAD — a human must decide what that state means"
+          if [ -d "$GITDIR/rebase-merge" ] || [ -d "$GITDIR/rebase-apply" ]; then
+            stop "a rebase is in progress in $BRAIN — this job will not rewrite history it did not start"
+          fi
+
+          rebuild_graphs() {
+            local dir slug rc=0
+            for dir in "$BRAIN"/nexus/*/; do
+              [ -d "$dir" ] || continue
+              dir="${dir%/}"
+              slug="$(basename "$dir")"
+              { [ -d "$dir/nodes" ] || [ -f "$dir/graph.json" ]; } || continue
+              echo "--- rebuilding graph for $slug"
+              # --brain-path, NOT the positional `graph-init.js <slug> <path>` form. The positional
+              # form treats the brain as a repo root, writes to nexus/<slug>/nexus/<slug>/graph.json
+              # — a brain nested inside the brain — and prints a success line for work it did not
+              # do (#346). The arrow in its output is relative, so the two forms are
+              # indistinguishable from the log alone.
+              node "$WS/tools/graph/graph-init.js" "$slug" --brain-path="$dir" || rc=1
+            done
+            return $rc
+          }
+
+          echo "=== 1. fetch (updates remote refs only; the working tree is untouched)"
+          git -C "$BRAIN" fetch --quiet origin || stop "git fetch failed — cannot reconcile without origin"
+
+          if [ -f "$GITDIR/MERGE_HEAD" ]; then
+            echo "=== 2. the brain is MID-MERGE — completing it, which preserves both parents"
+            node "$RESOLVER" --root="$BRAIN" || stop "could not resolve the in-progress merge losslessly"
+            rebuild_graphs || stop "graph rebuild failed while completing the in-progress merge"
+            git -C "$BRAIN" add -A
+            git -C "$BRAIN" "${IDENT[@]}" commit --quiet --no-edit \
+              || stop "could not commit the in-progress merge"
+          else
+            echo "=== 2. no merge in progress"
+          fi
+
+          echo "=== 3. resolve committed markers BEFORE any git add (the #344 inversion)"
+          node "$RESOLVER" --root="$BRAIN" || stop "the marker repair could not resolve every file — see UNRESOLVED lines above"
+          rebuild_graphs || stop "graph rebuild failed after the marker repair"
+
+          if [ -n "$(git -C "$BRAIN" status --porcelain)" ]; then
+            git -C "$BRAIN" add -A
+            git -C "$BRAIN" "${IDENT[@]}" commit --quiet \
+              -m "chore(brain): resolve conflict markers and rebuild graphs on $(hostname)" \
+              || stop "could not commit the repaired tree"
+            echo "committed the repaired tree"
+          else
+            echo "nothing to commit — the tree was already clean"
+          fi
+
+          echo "=== 4. merge origin/$BRANCH (a merge keeps both parents; local-only commits survive)"
+          MERGE_RC=0
+          git -C "$BRAIN" "${IDENT[@]}" merge --no-edit origin/"$BRANCH" || MERGE_RC=$?
+          if [ "$MERGE_RC" -ne 0 ]; then
+            echo "the merge conflicted — resolving with the lossless rules"
+            if ! node "$RESOLVER" --root="$BRAIN"; then
+              git -C "$BRAIN" merge --abort || true
+              stop "the merge could not be resolved losslessly — aborted it and left the brain as found"
+            fi
+            if ! rebuild_graphs; then
+              git -C "$BRAIN" merge --abort || true
+              stop "graph rebuild failed mid-merge — aborted the merge and left the brain as found"
+            fi
+            git -C "$BRAIN" add -A
+            git -C "$BRAIN" "${IDENT[@]}" commit --quiet --no-edit || stop "could not commit the merge resolution"
+          fi
+
+          echo "=== 5. prove zero markers remain BEFORE anything is pushed"
+          if ! node "$RESOLVER" --root="$BRAIN" --check; then
+            stop "conflict markers are STILL present after the repair — refusing to push them to origin"
+          fi
+
+          echo "=== 6. push via brain-sync.js (plain push; never --force)"
+          node "$WS/tools/brain-sync.js" || stop "brain-sync failed — the repair is committed locally but not pushed"
+
+          echo "=== 7. prove the repair by running the job that was failing"
+          node "$WS/tools/memory-decay.js" --all || stop "memory-decay still fails against the repaired brain"
+
+          echo "=== 8. push whatever the decay pass changed"
+          node "$WS/tools/brain-sync.js" || stop "brain-sync failed after the decay pass"
+
+          echo "repair-brain completed. Backup retained at ${BACKUP:-<not taken>}"
+
+      - name: Post-repair status
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          BRAIN="$HOME/agent-memory"
+          git -C "$BRAIN" log --oneline -5 2>/dev/null || true
+          git -C "$BRAIN" status --porcelain 2>/dev/null | head -20 || true
+          node "$GITHUB_WORKSPACE/tools/resolve-brain-markers.js" --root="$BRAIN" --check --quiet || true
+
+      - name: Clear the human-needed alert
+        if: success()
+        shell: bash
+        run: |
+          node "$GITHUB_WORKSPACE/tools/human-needed.js" resolve "$ALERT_KEY" \
+            --comment "runner-maintenance repair-brain completed on $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ). Markers are gone, graphs rebuilt, memory-decay --all passes." \
+            || echo "::warning::could not clear the human-needed alert"
+
+      - name: Raise the human-needed alert (repair stopped)
+        if: failure()
+        shell: bash
+        run: |
+          node "$GITHUB_WORKSPACE/tools/human-needed.js" raise "$ALERT_KEY" \
+            --title "[Infra]: the runner's agent-memory could not be repaired automatically" \
+            --why "\`runner-maintenance.yml\` (mode repair-brain) stopped on \`$(hostname)\` rather than force a resolution. See [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Stopping is the designed outcome when the brain cannot be reconciled losslessly — the runner may hold commits that exist on no other host, so a forced resolution would destroy facts permanently. A pre-repair backup of the whole checkout, .git included, was written to \`~/agent-memory-backups/\` on that host." \
+            --action "Read the run log for the \`stop\` reason. Dispatch \`gh workflow run runner-maintenance.yml -f mode=status\` for the current state. Detached HEAD or an in-progress rebase means a human must decide what that state was meant to be. UNRESOLVED lines from resolve-brain-markers.js name the exact files whose conflicts neither rule could resolve; for a graph.json that means rebuilding it from nodes/ with \`node tools/graph/graph-init.js <slug> --brain-path=\\\"\$HOME/agent-memory/nexus/<slug>\\\"\` (the --brain-path form, per #346). This issue closes itself on the next successful repair." \
+            || echo "::warning::could not raise the human-needed alert"
+
+  # ── bootstrap-run-log ──────────────────────────────────────────────────────────────────────
+  #
+  # weekly-trust-scores is red because ~/agent-memory/nexus/run-log/ has never existed on this
+  # host, and compute-trust-scores.js refuses to overwrite trust-scores.md with an empty report
+  # when its input is missing (#314 — no input is a broken pipeline, not an empty result). That
+  # refusal is the tool working. --allow-empty is its documented one-time bootstrap escape hatch,
+  # and it still refuses when trust-scores.md holds real data, so it cannot re-create the false
+  # green it replaced.
+  bootstrap-run-log:
+    if: inputs.mode == 'bootstrap-run-log'
+    runs-on: [self-hosted, Linux]
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the run-log directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="$HOME/agent-memory/nexus/run-log"
+          if [ -d "$DIR" ]; then
+            echo "$DIR already exists — $(find "$DIR" -name '*.json' | wc -l) json file(s), nothing to do"
+          else
+            mkdir -p "$DIR"
+            echo "created $DIR"
+          fi
+          # A .gitkeep so the directory survives the round trip through git, which does not track
+          # empty directories. Without it the next clone of the brain is back to square one.
+          [ -f "$DIR/.gitkeep" ] || printf '%s\n' \
+            "Run logs land here, written by the dispatch job in agent-dispatch.yml." > "$DIR/.gitkeep"
+
+      - name: Compute trust scores once with --allow-empty
+        shell: bash
+        run: node "$GITHUB_WORKSPACE/tools/compute-trust-scores.js" --allow-empty
+
+      - name: Push the bootstrap into the brain repo
+        shell: bash
+        run: node "$GITHUB_WORKSPACE/tools/brain-sync.js"

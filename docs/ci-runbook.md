@@ -179,3 +179,65 @@ actionlint's `shellcheck` and `pyflakes` integrations are disabled (`-shellcheck
 shellcheck is preinstalled on ubuntu runners and reports pre-existing SC2086/SC2001 style findings
 in unrelated workflows; folding those into this gate would make it land red for reasons unrelated
 to loadability. Enabling it is a follow-up once those are cleared.
+
+## Runner host maintenance (#347)
+
+`ssh` to the runner box is refused (port 22, connection refused), so
+`.github/workflows/runner-maintenance.yml` is the only hands-on channel to its `~/agent-memory`. It
+is `workflow_dispatch` **only** — deliberately not a routine, because `config/routines.yml` would
+then demand a matching cron job in `scheduled-tasks.yml` and `node tools/routines.js verify` would
+exit 1, and because a repair that can lose facts should never run unattended.
+
+The single input is `type: choice`. That is a security boundary, not a convenience: these steps run
+privileged commands on the same host that runs `sam-audit.yml`, the hard gate on merges to `main`,
+so a free-form string input would be arbitrary remote code execution on the machine that decides
+what gets merged.
+
+**It cannot be dispatched before it is merged.** GitHub only indexes a `workflow_dispatch` workflow
+that exists on the repository's **default branch**; until then `--ref <feature-branch>` returns
+`HTTP 404: workflow runner-maintenance.yml not found on the default branch`, and the file does not
+appear in `gh api repos/:owner/:repo/actions/workflows` at all. `--ref` selects which branch's copy
+*runs*, not whether the workflow exists. So the first `status` run is a post-merge action, and the
+branch-before-merge testing rule cannot apply to a dispatch-only workflow — lint and YAML parse are
+the pre-merge evidence available.
+
+```bash
+gh workflow run runner-maintenance.yml -f mode=status            # read-only; always run this first
+gh workflow run runner-maintenance.yml -f mode=repair-brain      # only after reading a status run
+gh workflow run runner-maintenance.yml -f mode=bootstrap-run-log # one-time; unblocks weekly-trust-scores
+```
+
+`repair-brain` is the dangerous one, because the runner's checkout may hold commits that exist on
+no other host (per-agent decision logs, user preference nodes). Its order is the safety property:
+
+1. tar the whole checkout **including `.git`** to `~/agent-memory-backups/` — the local-only commits
+   are the irreplaceable part, and a working-tree-only backup would not restore them;
+2. resolve markers **before any `git add`**. This inversion is the whole fix: `brain-sync.js` runs
+   `git add -A` *before* it pulls, so a half-merged tree is just file content to it and markers get
+   committed and pushed as data (#344, 128 files);
+3. reconcile with `git merge`, which keeps **both** parents. A merge commit cannot drop a local
+   commit; a reset can. `reset --hard`, `push --force`, `checkout --theirs` and `clean -fd` are
+   absent from that file on purpose;
+4. prove zero markers remain **before** pushing, so the repair run cannot be the one that publishes
+   markers to origin;
+5. rebuild every graph, then re-run `memory-decay.js --all` — verification by execution, not by
+   exit code.
+
+If any of that cannot be done losslessly the job **stops**, raises the `runner-brain-repair-blocked`
+human-needed alert, and exits nonzero. Stopping is the designed outcome; forcing a resolution is the
+failure mode.
+
+`tools/resolve-brain-markers.js` is the repair itself and is runnable anywhere (`--check` reports
+without writing). Two rules, both lossless: a block whose every line on both sides is a date-ish
+frontmatter key keeps the **earlier** value (`created:` is a creation timestamp, so a later value is
+a re-import artifact); everything else **unions** both sides, HEAD first, de-duplicated.
+`graph.json` is never repaired line-by-line — it is generated, so the tool takes one side that
+parses and the rebuild comes from `nodes/` via:
+
+```bash
+node tools/graph/graph-init.js <slug> --brain-path="$HOME/agent-memory/nexus/<slug>"
+```
+
+Use `--brain-path`. The positional `graph-init.js <slug> <path>` form writes a brain nested inside
+the brain and prints a success line for work it did not do (#346), and its output arrow is relative
+so the two forms are indistinguishable from the log.
