@@ -6,13 +6,18 @@
 *.sh eol=lf
 
 # Hook scripts (run on self-hosted Linux runner)
-hooks/ eol=lf
+# NOTE: `**` is required. Unlike .gitignore, a trailing-slash pattern in .gitattributes
+# does NOT match a directory's contents — `hooks/` matched nothing at all. The .sh files
+# under here only looked covered because the `*.sh` rule above caught them separately;
+# hooks/session-auto-rename-hook.js, which is deployed to the Linux runner, was
+# genuinely unprotected. Verified with `git check-attr eol -- <path>`.
+hooks/** eol=lf
 
 # GitHub workflows (run on Linux runners)
-.github/workflows/ eol=lf
+.github/workflows/** eol=lf
 
 # Node tools (executed as part of CI/CD infrastructure on multiple platforms)
-tools/ eol=lf
+tools/** eol=lf
 
 # Configuration files (consistency across platforms)
 *.json eol=lf
