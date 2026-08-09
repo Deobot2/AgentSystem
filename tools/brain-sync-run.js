@@ -250,7 +250,14 @@ if (isMainModule(import.meta.url)) {
       markRaised();
       verdict = { outcome: 'conflict', alert: true, exit: 3 };
     } else {
-      const args = ['--path', root, ...(pullOnly ? ['--pull-only'] : [])];
+      // --ignore-markers is forwarded, not consumed here: brain-sync.js carries the same guard
+      // (#348) for the direct-invocation path, and an override the operator gave the wrapper would
+      // otherwise be re-blocked one level down. It is the only flag forwarded beyond --path and
+      // --pull-only, and it suppresses a *scan* — it never resolves a conflict, which stays the
+      // one thing neither script will do.
+      const args = ['--path', root,
+        ...(pullOnly ? ['--pull-only'] : []),
+        ...(ignoreMarkers ? ['--ignore-markers'] : [])];
       // Bounded by the lock window, not open-ended. A `git push` hung on an unreachable remote
       // otherwise outlives its own lock: the next trigger sees a stale record, takes over, and two
       // brain-syncs run in one working tree — the exact overlap the lock exists to prevent, reached

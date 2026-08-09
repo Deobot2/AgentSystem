@@ -12,6 +12,9 @@
 //   node tools/brain-sync.js --status     report what would sync; change nothing
 //   node tools/brain-sync.js --pull-only  pull and merge; do not push
 //   node tools/brain-sync.js --path <dir> operate on a checkout other than ~/agent-memory
+//   node tools/brain-sync.js --ignore-markers  proceed even though tracked files hold `<<<<<<<`
+//                                              text (a node that legitimately quotes markers).
+//                                              Never bypasses an actually-unfinished merge.
 //
 // Exit codes: 0 synced (or nothing to do), 1 conflict needing a human, 2 usage/setup error.
 
@@ -24,12 +27,19 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 
 const args = process.argv.slice(2);
-const opt = { status: false, pullOnly: false, root: path.join(os.homedir(), 'agent-memory') };
+const opt = {
+  status: false, pullOnly: false, ignoreMarkers: false,
+  root: path.join(os.homedir(), 'agent-memory'),
+};
 
 for (let i = 0; i < args.length; i++) {
   switch (args[i]) {
     case '--status': opt.status = true; break;
     case '--pull-only': opt.pullOnly = true; break;
+    // Same spelling and same meaning as tools/brain-sync-run.js, which forwards it here. One flag,
+    // not two: the wrapper's preflight and this guard scan for the same thing, so an operator who
+    // has decided the markers are legitimate content must not have to learn a second override.
+    case '--ignore-markers': opt.ignoreMarkers = true; break;
     case '--path': opt.root = args[++i] || die('--path needs a directory', 2); break;
     case '-h': case '--help':
       process.stdout.write(
@@ -81,6 +91,63 @@ if (opt.status) {
   log(`local     ${changed} uncommitted change(s)`);
   if (dirty) log(dirty.split('\n').map((l) => `          ${l}`).join('\n'));
   process.exit(0);
+}
+
+// ------------------------------------------------------------------- refuse an unfinished merge
+
+// #348. When the pull below stops for a human it exits 1 *mid-merge*, leaving MERGE_HEAD and
+// marker-laden files in the tree. The next run read those as ordinary local changes, ran `add -A`
+// and committed — which concludes the merge and publishes `<<<<<<<` markers as brain content to
+// every host. That is 221f626: 129 corrupted files, and the weekly decay pass dying on the first
+// JSON.parse. So nothing below this point may touch the index until a person has finished it.
+//
+// tools/brain-sync-run.js runs an equivalent preflight before invoking this script, but it is not
+// the only caller: the alert it raises, the docs, and brain-join.sh all tell a person to run
+// `node tools/brain-sync.js` directly — which is precisely the moment the tree is half-merged. A
+// guard that only exists in the wrapper is absent exactly when it is needed.
+//
+// `--status` is exempt on purpose: reporting is how you look at a stuck tree.
+if (!opt.status) {
+  // Two distinct states, and only the second one is overridable.
+  //
+  //   (a) a merge is genuinely unfinished — MERGE_HEAD exists, or a path is unmerged in the index.
+  //       This is git state, not text, so `--ignore-markers` must not reach it. The way out is
+  //       `git commit` or `git merge --abort`, and pretending otherwise re-opens #348 behind a flag.
+  //
+  //   (b) markers are sitting in tracked content with no merge in progress — i.e. an earlier run
+  //       already committed them (#340). Here `--ignore-markers` is legitimate: a brain node may
+  //       quote marker text, and the brain now records this very incident.
+  const merging = git(['rev-parse', '--quiet', '--verify', 'MERGE_HEAD'], { allowFail: true }).code === 0;
+  const unmerged = git(['diff', '--name-only', '--diff-filter=U'], { allowFail: true }).out
+    .split('\n').filter(Boolean);
+
+  // `git grep` searches tracked files only — an untracked scratch file full of angle brackets is
+  // not a half-finished merge. -I skips binaries. Exit 1 means no matches, the healthy case.
+  const markerScan = opt.ignoreMarkers
+    ? { code: 1, out: '' }
+    : git(['grep', '-l', '-I', '-e', '^<<<<<<< '], { allowFail: true });
+  const marked = markerScan.code === 0 ? markerScan.out.split('\n').filter(Boolean) : [];
+
+  if (merging || unmerged.length || marked.length) {
+    // "merge conflict needs a human" verbatim: brain-sync-run.js keys its human-needed alert off
+    // that phrase (classify()), and treats a bare exit 1 as a plain failure. Without it a stuck
+    // tree exits 1, is filed as a network blip, and nobody is told. The paths are indented
+    // immediately below so conflictDetail() can lift them into the issue body.
+    const paths = (unmerged.length ? unmerged : marked);
+    process.stderr.write(
+      `brain-sync: merge conflict needs a human — ${
+        merging || unmerged.length
+          ? `a merge is still in progress in ${opt.root}`
+          : `${marked.length} tracked file(s) in ${opt.root} still contain merge-conflict markers`}:\n${
+        (paths.length ? paths : ['(see git status)']).map((f) => `  ${f}`).join('\n')}\n` +
+      `\nNothing was staged. \`git add -A\` here would conclude that merge and publish \`<<<<<<<\`\n` +
+      `markers as brain content to every host.\n` +
+      `Resolve in ${opt.root}, then: git commit && node tools/brain-sync.js\n` +
+      (merging || unmerged.length
+        ? `To throw the merge away instead: git merge --abort\n`
+        : `If a node legitimately quotes marker text: re-run with --ignore-markers\n`));
+    process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------- commit local work

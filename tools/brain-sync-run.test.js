@@ -293,6 +293,24 @@ test('--ignore-markers is the escape hatch for a node that legitimately quotes m
   assert.equal(r.human.calls().length, 0);
 });
 
+// brain-sync.js carries the same marker scan (#348), because the alert body and the docs both tell
+// a person to run it directly. Not forwarding the override means the operator clears the wrapper
+// and is stopped one level down by a guard taking no flags — an escape hatch that escapes nothing.
+test('--ignore-markers is forwarded to brain-sync, not just consumed by the preflight', () => {
+  const dir = scratch();
+  halfMergedRepo(dir);
+  const r = run(dir, { extra: ['--ignore-markers'] });
+  assert.deepEqual(r.brain.calls()[0], ['--path', dir, '--ignore-markers']);
+});
+
+// It suppresses a scan; it never resolves anything. If this ever grows a `-X ours` sibling, the
+// wrapper has started deciding which side of a memory node is right.
+test('no flag that resolves a conflict is ever forwarded', () => {
+  const dir = scratch();
+  const r = run(dir, { extra: ['--ignore-markers'] });
+  assert.doesNotMatch(r.brain.calls().join(' '), /-X |ours|theirs|--force|--reset/);
+});
+
 test('the lock is released when the preflight stops the run', () => {
   const dir = scratch();
   halfMergedRepo(dir);

@@ -114,6 +114,15 @@ Three triggers now do, all through one wrapper, `tools/brain-sync-run.js`:
   the person actually resolving them. The scan is repo-wide on purpose: scoping it to files git
   reports as *unmerged* would see nothing in exactly the case that motivated it (#340), where the
   markers were already committed.
+- **`brain-sync.js` carries the same guard itself** (#348), because the wrapper is not its only
+  caller: the alert body, `brain-join.sh` and the docs all tell a person to run
+  `node tools/brain-sync.js` directly, which is exactly the moment the tree is half-merged. It
+  refuses before `git add -A` when `MERGE_HEAD` exists, when a path is unmerged, or when tracked
+  content still holds `<<<<<<<`. `--ignore-markers` is forwarded down and suppresses only the
+  **text scan** — an actually-unfinished merge is git state, and a flag that concluded it would
+  re-open #348 behind an override; the ways out there are `git commit` and `git merge --abort`.
+  The refusal says "merge conflict needs a human" verbatim, because `brain-sync-run.js` classifies
+  on that phrase and reads a bare exit 1 as a network blip that alerts nobody.
 - Exit codes: `0` synced/skipped, `2` no brain checkout on this host (passed through, *not*
   alerted, or a host that never cloned it would re-raise forever), `3` conflict alerted — hence
   `SuccessExitStatus=0 3` in the unit.
