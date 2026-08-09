@@ -218,6 +218,171 @@ jobs:
 
           echo "canon report changed nothing."
 
+      # ── watchdog liveness (#362) ─────────────────────────────────────────────────────────────
+      #
+      # repair-install run 31341153954 PASSED — `WATCHDOG_RC: 0`, both ExecStart scripts in sync,
+      # `active actions-watchdog.timer` — and enforcement-drift-check run 31341237501, two minutes
+      # later, still reported "no actions-watchdog heartbeat found". Units correct, timer active, no
+      # heartbeat. `install-actions-watchdog.sh --check` cannot tell those apart because it only
+      # inspects units, `gh` and timer state; it never asks whether the SERVICE ran or what happened
+      # when it did. A repair whose verification cannot distinguish "installed" from "working" is a
+      # paper check — the same shape as #197 and #326.
+      #
+      # Three faults produce that evidence and want three different human actions:
+      #   (a) the service RAN and FAILED — `gh` unauthenticated for the timer's user, a node path
+      #       that does not resolve in the unit's minimal environment, or a crash. `Result` and the
+      #       journal say which.
+      #   (b) the service NEVER TRIGGERED — `list-timers` shows LAST=n/a and ActiveEnterTimestamp
+      #       is empty.
+      #   (c) the heartbeat IS being written, somewhere --check-heartbeat does not look — the unit
+      #       carries HOME/AGENT_MEMORY_ROOT differing from this job's. The resolved path plus its
+      #       mtime settle it.
+      #
+      # Read-only, like the rest of `status`: nothing here fetches, installs, enables, or writes.
+      # `--print-heartbeat-path` and `--check-heartbeat` are both read-only paths of the watchdog,
+      # and the bare `node tools/actions-watchdog.js` — which WOULD call GitHub and could raise an
+      # issue — is deliberately not run. Every command is guarded with an explicit rc so a host with
+      # no systemd, no journal or no gh reports "unavailable" and the diagnosis continues, rather
+      # than dying on the first probe and telling a human nothing (same `set +e` pattern as the
+      # repair-install preflight).
+      - name: Report actions-watchdog liveness (read-only)
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          WS="$GITHUB_WORKSPACE"
+          NAME=actions-watchdog
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+
+          # Zene8/AgentSystem is PUBLIC, so Actions logs and $GITHUB_STEP_SUMMARY are world-readable.
+          # The bar for anything printed here is therefore "could this EVER carry a credential",
+          # not "do I trust the person who dispatched it". Every emitter below goes through this,
+          # not just `gh auth status`: today no path reaches a token (the unit gets only PATH and
+          # HOME — see install-actions-watchdog.sh, which withholds GH_TOKEN on purpose — and `gh`
+          # answers a bad token with `HTTP 401: Bad credentials`), but that is a guarantee resting
+          # on gh's error-message behaviour rather than on this file. Two of the emitters print
+          # third-party text verbatim: journalctl carries the watchdog's own
+          # `cannot reach GitHub — <gh stderr>`, and the heartbeat's `reason` field newly
+          # interpolates that same gh stderr (#362). One filter is cheaper than re-deriving that
+          # argument the next time either of them changes.
+          # The second rule drops a whole `Token:` line whatever follows it, so an unknown future
+          # token prefix is still caught after the char-class rule misses it.
+          redact() { sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_-]+/<REDACTED>/g; s/(Token:).*/\1 <REDACTED>/'; }
+
+          # Runs a command, captures BOTH streams, and never lets its exit status escape. systemd
+          # and journalctl write the interesting part (bus unreachable, unit not loaded) to stderr.
+          show() {
+            local o
+            o="$("$@" 2>&1)"; local rc=$?
+            printf '%s\n' "${o:-<no output>}" | redact | tee -a "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' "  (exit $rc)" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+
+          # The runner service context has no bus exported. Same probe the repair-install steps use;
+          # without it every systemctl --user call below fails with "Failed to connect to bus" and
+          # the whole diagnosis reads as "systemd missing" on a host where it is fine.
+          UID_N="$(id -u)"
+          if [ -S "/run/user/$UID_N/bus" ]; then
+            export XDG_RUNTIME_DIR="/run/user/$UID_N"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_N/bus"
+            BUS="/run/user/$UID_N/bus (exported)"
+          else
+            BUS="/run/user/$UID_N/bus ABSENT — the user manager is not running for $(whoami); no --user unit can fire"
+          fi
+
+          out ""
+          out "### actions-watchdog liveness (#362) — did the service RUN, and what happened?"
+          out '```'
+          out "user          $(whoami)  (uid $UID_N)"
+          out "HOME          ${HOME:-<unset>}"
+          out "user bus      $BUS"
+          out "AGENT_MEMORY_ROOT  ${AGENT_MEMORY_ROOT:-<unset — falls back to \$HOME/agent-memory>}"
+          out '```'
+
+          out ""
+          out "#### timer schedule — \`systemctl --user list-timers $NAME.timer\`"
+          out "_LAST=\`n/a\` with NEXT set is fault (b): enabled, never triggered._"
+          out '```'
+          show systemctl --user list-timers "$NAME.timer" --all --no-pager
+          out '```'
+
+          out ""
+          out "#### last service run — \`systemctl --user show $NAME.service\`"
+          out "_\`Result=exit-code\` with a nonzero \`ExecMainStatus\` is fault (a): it ran and died._"
+          out "_An EMPTY \`ActiveEnterTimestamp\` means the service has never been started at all._"
+          out '```'
+          show systemctl --user show "$NAME.service" \
+            -p Result -p ExecMainStatus -p ExecMainCode -p NRestarts \
+            -p ActiveEnterTimestamp -p InactiveExitTimestamp -p LoadState -p UnitFileState
+          out '```'
+
+          out ""
+          out "#### journal — last 40 lines of \`journalctl --user -u $NAME.service\`"
+          out "_This is where the watchdog's own stderr lands: \`cannot reach GitHub — …\` names the_"
+          out "_gh failure directly. \`No journal files\` usually means no persistent journal for this_"
+          out "_user, not that the service is silent._"
+          out '```'
+          show journalctl --user -u "$NAME.service" --no-pager -n 40
+          out '```'
+
+          out ""
+          out "#### heartbeat file — resolved by the watchdog itself, not reconstructed here"
+          out '```'
+          NODE_BIN="$(command -v node 2>/dev/null || echo /usr/bin/node)"
+          HB="$("$NODE_BIN" "$WS/tools/actions-watchdog.js" --print-heartbeat-path 2>&1)"
+          HB_RC=$?
+          if [ "$HB_RC" -ne 0 ]; then
+            out "heartbeat path  COULD NOT RESOLVE (node exit $HB_RC): $HB"
+          else
+            out "heartbeat path  $HB"
+            if [ -f "$HB" ]; then
+              out "exists          yes"
+              out "mtime/size      $(stat -c '%s bytes, mtime %y' "$HB" 2>/dev/null || echo '<stat unavailable>')"
+              out "contents:"
+              # Redacted like everything else: this file's `reason` field now carries gh stderr.
+              cat "$HB" 2>&1 | redact | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              out "exists          NO — nothing has ever stamped this exact path"
+              # Fault (c) discriminator: a heartbeat for ANOTHER host name, or under another root,
+              # means the file is being written where --check-heartbeat does not read.
+              out ""
+              out "any heartbeat file anywhere under \$HOME/agent-memory/nexus:"
+              find "$HOME/agent-memory/nexus" -maxdepth 1 -name 'actions-watchdog-heartbeat-*.json' \
+                -printf '  %p  (mtime %t)\n' 2>&1 | head -10 | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          out '```'
+
+          out ""
+          out "#### \`--check-heartbeat\` verdict (read-only; this is what enforcement-drift-check asserts)"
+          out '```'
+          show "$NODE_BIN" "$WS/tools/actions-watchdog.js" --check-heartbeat
+          out '```'
+
+          out ""
+          out "#### gh auth — REDACTED, status only"
+          out "_Both watchdogs shell out to \`gh\`. Unauthenticated for THIS user is fault (a): the_"
+          out "_timer fires hourly and every run dies in \`probe()\`. Note the unit runs with only PATH_"
+          out "_and HOME, so a token present in this job's environment is NOT proof the unit has one._"
+          out '```'
+          if ! command -v gh >/dev/null 2>&1; then
+            out "gh              NOT ON PATH for $(whoami)"
+          else
+            out "gh binary       $(command -v gh)"
+            # --show-token is never passed, and the output is filtered anyway: gh prints the token
+            # already masked, but a future gh (or a stray GH_TOKEN echo in an error path) must not be
+            # able to put a credential into a workflow log that is public on this repo.
+            gh auth status 2>&1 | redact | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          out '```'
+
+          out ""
+          out "_Read-only: this step ran no fetch, no install, no enable and wrote nothing. It did not_"
+          out "_run the watchdog's live check either, which would call GitHub and could raise an issue._"
+
+          echo "watchdog liveness report changed nothing."
+
   # ── repair-brain ───────────────────────────────────────────────────────────────────────────
   #
   # The dangerous one. The runner's ~/agent-memory may hold commits that exist on NO other host —

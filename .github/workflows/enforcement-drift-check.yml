@@ -123,7 +123,7 @@ jobs:
             bash "${{ github.workspace }}/tools/install-actions-watchdog.sh" --check || true
             echo "--- end cause ---"
             driftFound=1
-            results="${results}• actions-watchdog heartbeat missing or stale — the hourly timer may be dead (tools/actions-watchdog.js --check-heartbeat; cause in the job log from tools/install-actions-watchdog.sh --check; repair by dispatching runner-maintenance.yml -f mode=repair-install)\n"
+            results="${results}• actions-watchdog heartbeat missing, stale or FAILING — read the STALE:/FAILING: line above: STALE means the hourly timer is not firing, FAILING means it fires and every run dies before it can check anything (#362). Cause in the job log from tools/install-actions-watchdog.sh --check; full host diagnosis by dispatching runner-maintenance.yml -f mode=status (read-only), repair with -f mode=repair-install\n"
           else
             echo "PASSED: actions-watchdog heartbeat is fresh"
           fi

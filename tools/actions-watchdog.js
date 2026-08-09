@@ -5,6 +5,8 @@
 //   node tools/actions-watchdog.js            # check, raise or resolve the alert
 //   node tools/actions-watchdog.js --dry-run  # print the verdict, touch nothing
 //   node tools/actions-watchdog.js --max-age-hours 12
+//   node tools/actions-watchdog.js --check-heartbeat        # is this host's timer alive and working?
+//   node tools/actions-watchdog.js --print-heartbeat-path   # read-only: where this host would stamp
 //
 // Why this exists (#197): Actions was disabled at the repository level for five days and nothing
 // noticed, because `runner-health-check.yml` — the watchdog for exactly that outage — is itself an
@@ -51,11 +53,38 @@ export function heartbeatPath(host = hostname(), root = agentMemoryRoot()) {
   return join(root, 'nexus', `actions-watchdog-heartbeat-${host}.json`);
 }
 
+// #362: the heartbeat used to be stamped ONLY after `probe()` returned — i.e. only once the run
+// had already reached GitHub and produced a verdict. Every failure before that point (`gh` not on
+// the unit's minimal PATH, `gh` unauthenticated for the timer's user, a network error, an API 5xx,
+// any crash) took the catch below and exited 1 having written nothing. So the heartbeat proved
+// "the watchdog ran AND reached GitHub", never "the watchdog ran" — and the one fault it exists to
+// name (a timer that fires hourly and dies hourly) produced exactly the same evidence as a timer
+// that never fired at all: no file. Worse, that state was PERMANENTLY unclearable — the alert
+// could only be closed by a run that succeeded, which is the case that was never in doubt.
+//
+// So liveness and verdict are now two separate fields, stamped on every completed run:
+//   ran      — always true in a file that exists; the file's existence IS the liveness proof
+//   verdict  — 'healthy' | 'down' | 'error'; what the run concluded, or that it could not conclude
+// `error` is a heartbeat: the timer is alive and the check is broken, which is a third state and
+// must not be reported as either "healthy and quiet" or "dead timer".
 export function writeHeartbeat({ verdict, ageHours = null, reason = null, host = hostname(), now = new Date(), path = heartbeatPath(host) } = {}) {
-  const payload = { timestamp: now.toISOString(), host, verdict, ageHours, reason };
+  const payload = { timestamp: now.toISOString(), host, ran: true, verdict, ageHours, reason };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   return payload;
+}
+
+/**
+ * Stamp a heartbeat, but never let stamping it be the reason a run dies. The heartbeat is
+ * diagnostics; the watchdog's own verdict is the product. A read-only ~/agent-memory or a full
+ * disk should degrade the diagnostics, not suppress the outage alert.
+ */
+export function tryWriteHeartbeat(args) {
+  try { return writeHeartbeat(args); }
+  catch (err) {
+    console.error(`actions-watchdog: could not stamp heartbeat — ${(err.message || err).toString().trim()}`);
+    return null;
+  }
 }
 
 export const DEFAULT_HEARTBEAT_MAX_AGE_HOURS = 3;
@@ -71,7 +100,16 @@ export function decideHeartbeatFreshness({ heartbeat, now = new Date(), maxAgeHo
   if (ageHours > maxAgeHours) {
     return { stale: true, ageHours, reason: `actions-watchdog heartbeat is ${ageHours.toFixed(1)}h old (budget ${maxAgeHours}h) — the hourly timer looks dead` };
   }
-  return { stale: false, ageHours };
+  // Fresh, so the timer is demonstrably alive — a different fault from a dead one, and it gets its
+  // own word. Reported as `failing`, not `stale`: telling a human "the timer looks dead" when the
+  // timer is fine and `gh` is unauthenticated sends them to the wrong host state entirely.
+  if (heartbeat.verdict === 'error') {
+    return {
+      stale: false, failing: true, ageHours,
+      reason: `the actions-watchdog timer IS firing (heartbeat ${ageHours.toFixed(1)}h old) but every run fails before it can check anything: ${heartbeat.reason || 'no reason recorded'}`,
+    };
+  }
+  return { stale: false, failing: false, ageHours };
 }
 
 export function readHeartbeat(path = heartbeatPath()) {
@@ -130,11 +168,13 @@ export function parseArgs(argv) {
   const flags = {
     dryRun: false, maxAgeHours: DEFAULT_MAX_AGE_HOURS,
     checkHeartbeat: false, heartbeatMaxAgeHours: DEFAULT_HEARTBEAT_MAX_AGE_HOURS,
+    printHeartbeatPath: false,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dry-run') flags.dryRun = true;
     else if (argv[i] === '--max-age-hours') flags.maxAgeHours = Number(argv[++i]);
     else if (argv[i] === '--check-heartbeat') flags.checkHeartbeat = true;
+    else if (argv[i] === '--print-heartbeat-path') flags.printHeartbeatPath = true;
     else if (argv[i] === '--heartbeat-max-age-hours') flags.heartbeatMaxAgeHours = Number(argv[++i]);
   }
   return flags;
@@ -143,11 +183,25 @@ export function parseArgs(argv) {
 if (isMainModule(import.meta.url)) {
   const flags = parseArgs(process.argv.slice(2));
 
+  // Diagnostic only, and read-only. The heartbeat path is derived from AGENT_MEMORY_ROOT (or $HOME)
+  // *inside this process*, so a reader that reconstructs it in shell can be wrong in exactly the
+  // way that matters: a systemd unit carrying a different HOME/AGENT_MEMORY_ROOT than the job doing
+  // the checking would stamp a real heartbeat somewhere --check-heartbeat never looks (#362, fault
+  // c). Asking the code where it would look is the only answer that cannot disagree with the code.
+  if (flags.printHeartbeatPath) {
+    console.log(heartbeatPath());
+    process.exit(0);
+  }
+
   if (flags.checkHeartbeat) {
     const heartbeat = readHeartbeat();
     const verdict = decideHeartbeatFreshness({ heartbeat, maxAgeHours: flags.heartbeatMaxAgeHours });
     if (verdict.stale) {
       console.error(`STALE: ${verdict.reason}`);
+      process.exit(1);
+    }
+    if (verdict.failing) {
+      console.error(`FAILING: ${verdict.reason}`);
       process.exit(1);
     }
     console.log(`fresh: actions-watchdog heartbeat is ${verdict.ageHours.toFixed(1)}h old (verdict: ${heartbeat.verdict})`);
@@ -160,7 +214,15 @@ if (isMainModule(import.meta.url)) {
   } catch (err) {
     // Cannot reach GitHub, so we also cannot raise an issue about it. Fail loudly to the journal
     // rather than resolving the alert on no evidence — `systemctl --user status` shows this.
-    console.error(`actions-watchdog: cannot reach GitHub — ${(err.stderr || err.message || '').toString().trim()}`);
+    //
+    // The heartbeat is stamped FIRST and unconditionally (#362). This is the path a `gh` that is
+    // missing, unauthenticated or rate-limited takes, and it used to write nothing at all — which
+    // made a broken-but-firing timer indistinguishable from a dead one, and left the drift alert
+    // with no reachable way to clear. The stamp records that the run happened and why it could not
+    // conclude; `--check-heartbeat` reports that as FAILING, not STALE.
+    const why = (err.stderr || err.message || '').toString().trim();
+    console.error(`actions-watchdog: cannot reach GitHub — ${why}`);
+    tryWriteHeartbeat({ verdict: 'error', reason: `probe failed: ${why || 'unknown error'}` });
     process.exit(1);
   }
 
@@ -168,13 +230,13 @@ if (isMainModule(import.meta.url)) {
 
   if (!verdict.down) {
     console.log(`healthy: Actions enabled, newest run ${verdict.ageHours.toFixed(1)}h old`);
-    writeHeartbeat({ verdict: 'healthy', ageHours: verdict.ageHours });
+    tryWriteHeartbeat({ verdict: 'healthy', ageHours: verdict.ageHours });
     resolve({ key: ALERT_KEY, comment: 'Actions is running again — newest workflow run is inside the freshness budget.', dryRun: flags.dryRun });
     process.exit(0);
   }
 
   console.error(`OUTAGE: ${verdict.reason}`);
-  writeHeartbeat({ verdict: 'down', ageHours: verdict.ageHours ?? null, reason: verdict.reason });
+  tryWriteHeartbeat({ verdict: 'down', ageHours: verdict.ageHours ?? null, reason: verdict.reason });
   raise({
     key: ALERT_KEY,
     title: 'GitHub Actions is not running — every workflow in this repo is inert',
