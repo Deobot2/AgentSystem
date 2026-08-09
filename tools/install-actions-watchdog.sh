@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# install-actions-watchdog.sh — put tools/actions-watchdog.js on an hourly systemd --user timer.
+# install-actions-watchdog.sh — put the off-Actions CI watchdogs on an hourly systemd --user timer.
 #
-# The point of the watchdog is to live OUTSIDE GitHub Actions (#197), so it is installed on the
+# Two checks share the unit, because they answer the same question from opposite ends:
+#   tools/actions-watchdog.js     — is Actions running at all? (#197)
+#   tools/pr-checks-watchdog.js   — is any open PR against main producing no required checks?
+#
+# The point of both is to live OUTSIDE GitHub Actions (#197), so they are installed on the
 # host rather than as a workflow. User units, not system units: no sudo, and `gh` is already
 # authenticated as this user. Lingering is enabled so the timer keeps firing after logout.
 #
@@ -31,7 +35,7 @@ mkdir -p "$UNIT_DIR"
 # from nvm or a tarball rather than /usr/bin.
 cat > "$UNIT_DIR/$NAME.service" <<UNIT
 [Unit]
-Description=GitHub Actions liveness watchdog (runs off Actions, see #197)
+Description=GitHub Actions + PR check watchdogs (run off Actions, see #197)
 After=network-online.target
 Wants=network-online.target
 
@@ -41,14 +45,16 @@ WorkingDirectory=$REPO_ROOT
 Environment=PATH=$PATH
 Environment=HOME=$HOME
 ExecStart=$(command -v node) $REPO_ROOT/tools/actions-watchdog.js
-# 3 = outage detected and alert raised. That is the watchdog working, not the unit failing, so
-# systemd must not mark it failed and must not back off.
+ExecStart=$(command -v node) $REPO_ROOT/tools/pr-checks-watchdog.js
+# 3 = problem detected and alert raised, from either script. That is a watchdog working, not the
+# unit failing, so systemd must not mark it failed and must not back off. Both use the same code
+# so a raised alert in the first ExecStart still lets the second one run.
 SuccessExitStatus=0 3
 UNIT
 
 cat > "$UNIT_DIR/$NAME.timer" <<'UNIT'
 [Unit]
-Description=Hourly GitHub Actions liveness check
+Description=Hourly off-Actions CI health checks (Actions liveness + unchecked PRs)
 
 [Timer]
 OnBootSec=5min
