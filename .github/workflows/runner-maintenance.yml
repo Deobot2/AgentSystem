@@ -212,7 +212,9 @@ jobs:
           out '```'
           out ""
           out "_No fetch was run against the canonical checkout: \`status\` mutates nothing, and even a"
-          out "fetch writes remote refs. Dispatch \`repair-install\` for the bounded ff-only self-heal._"
+          out "fetch writes remote refs. Dispatch \`repair-install\` for the bounded self-heal — fetch, a"
+          out "return to \`main\` if canon is parked on another branch, then merge --ff-only; clean tree and"
+          out "attached HEAD only, and the branch it leaves is never deleted._"
 
           echo "canon report changed nothing."
 
@@ -480,17 +482,31 @@ jobs:
   # The stale-clone case is also the one this job can fix itself, so in repair-install mode ONLY it
   # does — inside a boundary chosen so it can never destroy work:
   #
-  #   * ONLY when canon is a git checkout, ON `main`, with ZERO dirty paths. A working tree a person
-  #     may be mid-edit in is not something a dispatched job gets to rewrite.
-  #   * ONLY `fetch` + `merge --ff-only`. A fast-forward cannot discard a commit. `reset --hard`,
-  #     `checkout --`, `clean -fd` and `stash` are absent on purpose, exactly as in repair-brain.
-  #   * On any other state — dirty, another branch, not a checkout, or an ff-only that refuses
-  #     because canon has diverged — it prints precisely which and stops for a human. It does not
-  #     escalate to a stronger command.
+  #   * ONLY when canon is a git checkout with ZERO dirty paths. A working tree a person may be
+  #     mid-edit in is not something a dispatched job gets to rewrite.
+  #   * ONLY `fetch` + (if needed) `checkout main` + `merge --ff-only`. `reset --hard`,
+  #     `checkout --`, `clean -fd`, `stash` and every force flag are absent on purpose, exactly as
+  #     in repair-brain: none of the commands used here can make a commit unreachable.
+  #   * Canon may be on ANOTHER BRANCH and still be healed, because that is the state run
+  #     31339872073 actually found: a clean checkout parked on `issue-348-brain-sync-merge-guard`,
+  #     whose work is already squash-merged into main, missing tools/brain-sync-run.js only because
+  #     the branch was cut before #341 landed. Refusing that was a paper boundary — nothing was at
+  #     risk and the host stayed broken. So a clean, attached checkout is returned to `main` first
+  #     (`fetch origin main`, then `checkout main`, or `checkout -B main --track origin/main` when
+  #     no local `main` exists yet), then fast-forwarded as before.
+  #   * The branch it left is NEVER deleted. Its ref keeps every commit on it reachable, which is
+  #     exactly what makes the switch non-destructive; the commits `origin/main..HEAD` are printed
+  #     BEFORE the switch so the evidence survives it and a human can `git checkout` straight back.
+  #   * A DETACHED HEAD is REFUSED with its own message and never switched away from: there is no
+  #     ref holding those commits, so switching would make them reachable from nothing. That is the
+  #     one case where "return canon to main" would destroy work, so it is the one case excluded.
+  #   * On any other state — dirty, detached, not a checkout, or an ff-only that refuses because
+  #     canon has diverged — it prints precisely which and stops for a human. It does not escalate
+  #     to a stronger command.
   #
   # This is CODE only. ~/agent-memory is untouched by the heal, as it is by the rest of this job.
-  # `status` mode carries the same diagnostics with no fetch and no merge at all, so a human can
-  # read canon's state without dispatching a repair.
+  # `status` mode carries the same diagnostics with no fetch, no checkout and no merge at all, so a
+  # human can read canon's state without dispatching a repair.
   #
   # The --check invocations, by contrast, all run from the workspace, matching
   # enforcement-drift-check.yml exactly — so a green AFTER here is a direct prediction that
@@ -597,22 +613,27 @@ jobs:
           fi
 
           # ── SELF-HEAL (bounded) ──────────────────────────────────────────────────────────────
-          # Clean `main` only, fetch + ff-only only. See the job header for why the boundary is
-          # drawn exactly here. No reset, no checkout, no clean, no stash, no force — a
-          # fast-forward is the only git operation that cannot discard a commit. Code only:
+          # Clean tree only; fetch, an optional `checkout main`, then ff-only. See the job header
+          # for why the boundary is drawn exactly here. No reset, no `checkout --`, no clean, no
+          # stash, no force — none of the commands used below can make a commit unreachable. A
+          # clean checkout parked on another branch IS returned to main, and the branch it leaves
+          # is never deleted, so its commits stay reachable from that ref; the commits it holds
+          # over origin/main are printed BEFORE the switch so the evidence survives it. A DETACHED
+          # HEAD is refused instead, because there no ref would hold them. Code only:
           # ~/agent-memory is not involved.
           out ""
-          out "### canon self-heal — fetch + merge --ff-only (clean \`main\` only)"
+          out "### canon self-heal — fetch + (return to \`main\`) + merge --ff-only (clean tree only)"
           out '```'
           HEALED=skipped
           HEAL_WHY=""
-          if [ "$CANON_BRANCH" != "main" ]; then
-            HEAL_WHY="canon is on branch '$CANON_BRANCH', not main"
-            out "SKIPPED — $HEAL_WHY. This job does not switch branches on a checkout it does not own."
-          elif [ "$CANON_DIRTY" != "0" ]; then
+          if [ "$CANON_DIRTY" != "0" ]; then
             HEAL_WHY="canon has $CANON_DIRTY dirty path(s); someone may be mid-edit"
             out "SKIPPED — $HEAL_WHY. Rewriting that tree from a dispatch is not acceptable."
             git -C "$CANON" status --porcelain 2>/dev/null | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$CANON_BRANCH" = "HEAD" ] || [ "$CANON_BRANCH" = "?" ]; then
+            HEALED=refused-detached
+            HEAL_WHY="canon is on a DETACHED HEAD, not a named local branch"
+            out "REFUSED — $HEAL_WHY. Switching away would leave the commits at that HEAD reachable from no ref at all, and this job will never do that. On the host, either give them a branch (git -C $CANON switch -c <name>) or check main out by hand, then re-dispatch repair-install."
           else
             out "HEAD before   $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null)"
             FETCH_OUT="$(git -C "$CANON" fetch --quiet origin main 2>&1)"; FETCH_RC=$?
@@ -622,18 +643,59 @@ jobs:
               HEAL_WHY="git fetch origin main failed in $CANON (exit $FETCH_RC) — no network, no credentials, or origin ($CANON_ORIGIN) is unreachable from this host"
               out "FAILED — $HEAL_WHY"
             else
-              MERGE_OUT="$(git -C "$CANON" merge --ff-only origin/main 2>&1)"; MERGE_RC=$?
-              [ -n "$MERGE_OUT" ] && out "$MERGE_OUT"
-              if [ "$MERGE_RC" -ne 0 ]; then
-                HEALED=failed
-                HEAL_WHY="git merge --ff-only origin/main refused (exit $MERGE_RC) — canon has commits that are not on origin/main, so it cannot fast-forward. NOTHING was forced"
-                out "FAILED — $HEAL_WHY"
-              else
-                HEALED=yes
-                out "OK — fast-forwarded (or already up to date)"
+              # Return to main first, if canon is parked elsewhere. Evidence before verdict: the
+              # commits this branch holds over the freshly fetched origin/main are printed while
+              # HEAD still points at them. The branch ref is left in place, so `git checkout
+              # $CANON_BRANCH` on the host restores exactly this state.
+              SWITCHED=no
+              if [ "$CANON_BRANCH" != "main" ]; then
+                out ""
+                out "canon is on branch '$CANON_BRANCH', not main — returning it to main."
+                out "commits on '$CANON_BRANCH' that are NOT on origin/main (kept; the branch is NOT deleted):"
+                AHEAD_LOG="$(git -C "$CANON" log --oneline origin/main..HEAD 2>/dev/null | head -20)"
+                if [ -n "$AHEAD_LOG" ]; then
+                  printf '%s\n' "$AHEAD_LOG" | tee -a "$GITHUB_STEP_SUMMARY"
+                else
+                  out "  (none — '$CANON_BRANCH' holds nothing that origin/main does not)"
+                fi
+                if git -C "$CANON" rev-parse --verify --quiet refs/heads/main >/dev/null 2>&1; then
+                  # Plain checkout: it refuses rather than discarding anything, and the tree is
+                  # already known clean. -B is NOT used here — on an existing local main it would
+                  # move that ref and could orphan commits.
+                  CO_OUT="$(git -C "$CANON" checkout main 2>&1)"; CO_RC=$?
+                else
+                  # No local main at all (a clone that only ever checked out this branch), so
+                  # there is no ref for -B to move; it just creates main tracking origin/main.
+                  CO_OUT="$(git -C "$CANON" checkout -B main --track origin/main 2>&1)"; CO_RC=$?
+                fi
+                [ -n "$CO_OUT" ] && out "$CO_OUT"
+                if [ "$CO_RC" -ne 0 ]; then
+                  HEALED=failed
+                  HEAL_WHY="git checkout main refused in $CANON (exit $CO_RC) while returning it from '$CANON_BRANCH' — NOTHING was forced and the checkout was left on '$CANON_BRANCH'"
+                  out "FAILED — $HEAL_WHY"
+                else
+                  SWITCHED=yes
+                  out "OK — switched '$CANON_BRANCH' -> main. Branch '$CANON_BRANCH' still exists and still points at the commits above."
+                fi
+              fi
+              if [ "$HEALED" != failed ]; then
+                MERGE_OUT="$(git -C "$CANON" merge --ff-only origin/main 2>&1)"; MERGE_RC=$?
+                [ -n "$MERGE_OUT" ] && out "$MERGE_OUT"
+                if [ "$MERGE_RC" -ne 0 ]; then
+                  HEALED=failed
+                  HEAL_WHY="git merge --ff-only origin/main refused (exit $MERGE_RC) — canon has commits that are not on origin/main, so it cannot fast-forward. NOTHING was forced"
+                  out "FAILED — $HEAL_WHY"
+                elif [ "$SWITCHED" = yes ]; then
+                  HEALED=yes-switched-to-main
+                  out "OK — returned to main from '$CANON_BRANCH' and fast-forwarded (or already up to date)"
+                else
+                  HEALED=yes
+                  out "OK — fast-forwarded (or already up to date)"
+                fi
               fi
             fi
             out "HEAD after    $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null)"
+            out "branch after  $(git -C "$CANON" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
           fi
           out "result        $HEALED"
           out '```'
@@ -642,10 +704,10 @@ jobs:
           # A file still missing after a SUCCESSFUL ff-only pull is a categorically different fault
           # from a stale clone, and gets its own message so nobody re-runs the same repair twice.
           if [ ! -f "$CANON/tools/brain-sync-run.js" ]; then
-            if [ "$HEALED" = yes ]; then
+            if [ "$HEALED" = yes ] || [ "$HEALED" = yes-switched-to-main ]; then
               fatal "the ff-only pull of $CANON SUCCEEDED and $CANON/tools/brain-sync-run.js is STILL missing. This is NOT a stale clone — a checkout in step with origin/main would have that file (PR #341). Something else is wrong with $CANON: its origin is '$CANON_ORIGIN' and may not be this repository, or it is a sparse/partial checkout that excludes tools/. Inspect it on the host and re-clone if it is the wrong repo, then re-dispatch repair-install."
             fi
-            fatal "$CANON/tools/brain-sync-run.js is missing and the self-heal could not fix it: $HEAL_WHY. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace: that path is rewritten by actions/checkout, and the resulting unit would point at a directory that no longer exists while still looking healthy in systemctl status. Resolve the state above on the host by hand (the heal only ever runs fetch + merge --ff-only on a clean main, on purpose), then re-dispatch repair-install."
+            fatal "$CANON/tools/brain-sync-run.js is missing and the self-heal could not fix it: $HEAL_WHY. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace: that path is rewritten by actions/checkout, and the resulting unit would point at a directory that no longer exists while still looking healthy in systemctl status. Resolve the state above on the host by hand (the heal only ever runs fetch, an optional checkout of main, and merge --ff-only, and only on a clean tree with an attached HEAD, on purpose), then re-dispatch repair-install."
           fi
 
           out ""
