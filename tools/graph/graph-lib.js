@@ -1,5 +1,5 @@
 // graph-lib.js — core graph library, zero npm dependencies
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -48,6 +48,15 @@ export function emptyGraph(brain, projectSlug) {
 
 export function readGraph(graphPath) {
   return JSON.parse(readFileSync(graphPath, 'utf8'));
+}
+
+// Read-only analysis passes (decay, stale-detection) run over a brain that may
+// legitimately not have a graph.json yet -- per-repo/agent brains are gitignored,
+// so a fresh host or a brain nothing has written to yet is a normal state, not a
+// corruption (see CLAUDE.md "Central brain"). Returns null instead of throwing so
+// callers can skip cleanly without ever writing a placeholder graph to disk.
+export function readGraphIfExists(graphPath) {
+  return existsSync(graphPath) ? readGraph(graphPath) : null;
 }
 
 export function writeGraph(graphPath, graph) {
