@@ -1,0 +1,20 @@
+# Normalize line endings: LF for executed files and cross-platform infrastructure
+# Windows developers with core.autocrlf=true will have these files checked out with CRLF
+# but Git will store them as LF, and these settings pin that behavior.
+
+# Shell scripts (executed on Linux runners and Windows Git Bash)
+*.sh eol=lf
+
+# Hook scripts (run on self-hosted Linux runner)
+hooks/ eol=lf
+
+# GitHub workflows (run on Linux runners)
+.github/workflows/ eol=lf
+
+# Node tools (executed as part of CI/CD infrastructure on multiple platforms)
+tools/ eol=lf
+
+# Configuration files (consistency across platforms)
+*.json eol=lf
+*.yml eol=lf
+*.yaml eol=lf
