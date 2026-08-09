@@ -75,6 +75,12 @@ jobs:
             // emit a `skipped` conclusion, which GitHub counts as a satisfied required check —
             // the #228 bypass. Exiting early here emits a real passing check instead, and the
             // audit fires for real on ready_for_review.
+            // `approve` is deliberately narrower than `skip`. A skipped audit only needs to emit a
+            // passing check; posting the approving review is what makes the PR mergeable through
+            // pr-guard, and a draft must not carry that forward — the real audit on
+            // ready_for_review may BLOCK, and an approval left over from draft state would sit in
+            // the review list next to it (#271).
+            core.setOutput('approve', 'false');
             if (pr.draft) {
               core.setOutput('skip', 'true');
               core.setOutput('skip_reason', 'draft PR — audit runs on ready_for_review');
@@ -83,6 +89,7 @@ jobs:
             const labels = pr.labels.map(l => l.name);
             if (labels.includes('spec')) {
               core.setOutput('skip', 'true');
+              core.setOutput('approve', 'true');
               core.setOutput('skip_reason', 'spec-labeled PR (design/spec discussion, not mergeable code audit)');
               return;
             }
@@ -95,12 +102,36 @@ jobs:
             const docsOnly = files.length > 0 && files.every(f =>
               f.filename.startsWith('docs/') || f.filename.endsWith('.md'));
             core.setOutput('skip', docsOnly ? 'true' : 'false');
-            if (docsOnly) core.setOutput('skip_reason', 'docs-only change (docs/** and *.md files only)');
+            if (docsOnly) {
+              core.setOutput('approve', 'true');
+              core.setOutput('skip_reason', 'docs-only change (docs/** and *.md files only)');
+            }
 
       - name: Pass check without audit (docs-only / spec)
         if: steps.precheck.outputs.skip == 'true'
         run: |
           echo "APPROVED without Claude audit: ${{ steps.precheck.outputs.skip_reason }}"
+
+      # A green check is not an approval. pr-guard.js gates on an actual review from
+      # github-actions[bot] whose body carries both "Sam (CSO)" and "APPROVED:", so the fast path
+      # has to post one too — otherwise every docs-only PR passed CI and could never satisfy the
+      # guard (#271). Same identity and same markers as the audited path below, so there stays
+      # exactly one definition of "Sam approved this".
+      - name: Post Sam approval without audit (docs-only / spec)
+        if: steps.precheck.outputs.approve == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const reason = ${{ toJSON(steps.precheck.outputs.skip_reason) }};
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              body: `✅ **Sam (CSO) — Automated Security Audit**\n\nAPPROVED: ${reason} — no model audit required.`,
+              // COMMENT, not APPROVE: GitHub blocks the built-in GITHUB_TOKEN from approving PRs.
+              event: 'COMMENT',
+            });
 
       - name: Resolve gh/claude absolute paths for runner service context
         if: steps.precheck.outputs.skip != 'true'

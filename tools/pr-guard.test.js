@@ -61,6 +61,20 @@ test('isSamApproval rejects CHANGES_REQUESTED review even from the trusted bot i
   assert.strictEqual(isSamApproval(review), false);
 });
 
+// #271: a docs-only PR never runs the Claude audit, so its approval comes from sam-audit.yml's
+// fast path instead. That body is generated separately from the audited one and must keep
+// satisfying the same gate — before this, docs-only PRs got a green check and no review at all,
+// which made pr-guard unpassable for them no matter what the author did.
+test('isSamApproval accepts the docs-only fast-path review sam-audit.yml posts without an audit', () => {
+  const review = {
+    state: 'COMMENTED',
+    user: { login: 'github-actions[bot]', type: 'Bot' },
+    body: '✅ **Sam (CSO) — Automated Security Audit**\n\n' +
+      'APPROVED: docs-only change (docs/** and *.md files only) — no model audit required.',
+  };
+  assert.strictEqual(isSamApproval(review), true);
+});
+
 // Helper to simulate checkPr result shape
 function makeResult({ checksOk, threadsOk, samAuditOk = true, prNumber = '99' }) {
   return {
