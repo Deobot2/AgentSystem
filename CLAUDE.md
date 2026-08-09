@@ -242,9 +242,30 @@ workflow run is younger than 24h, and raises/resolves the `actions-down` human-n
 repo-level disable silences the detector along with everything it detects — that is how Actions
 sat off for five days unnoticed (#197). It lives on the host:
 ```bash
-bash tools/install-actions-watchdog.sh      # systemd --user timer, hourly, enables linger
-node tools/actions-watchdog.js --dry-run    # verdict only, changes nothing
+bash tools/install-actions-watchdog.sh          # systemd --user timer, hourly, enables linger
+bash tools/install-actions-watchdog.sh --check  # exit 1 on drift; names WHICH fault
+node tools/actions-watchdog.js --dry-run        # verdict only, changes nothing
 ```
+Living off Actions does not mean it cannot be **installed** by Actions, and that distinction is
+what #361 turned on: the timer had no repair channel on the host that refuses ssh, so the daily
+drift check reported a missing heartbeat for weeks with no way to act on it. `repair-install`
+(`runner-maintenance.yml -f mode=repair-install`) now installs it from the canonical checkout
+`$HOME/dev/AgentSystem` — never the runner workspace, whose path `actions/checkout` rewrites, which
+would bake a rotting `ExecStart=` into the unit — and then gates on `--check`. Exit 4 (units on
+disk, systemd `--user` bus unreachable) and exit 5 (`gh` missing or unauthenticated, nothing
+written) both fail the job and print the exact console command, because a repair that reports
+success for a timer that will never fire is the failure it was built to end.
+
+**The installer refuses to install against an unauthenticated `gh`, and no caller may hand it a
+token.** Both watchdogs shell out to `gh`; the unit runs later with only `PATH` and `HOME`, so a
+token in the installing process proves authentication the timer will never have. The result would
+be a timer that fires hourly, fails hourly and stamps no heartbeat — indistinguishable from #361.
+
+`--check` exists because `--check-heartbeat` cannot say *why*: never installed, installed but never
+enabled, pointing at a checkout that moved, and `gh` unauthenticated all surface as the same
+"heartbeat missing or stale" line. The daily job now prints `--check` as a diagnostic under that
+failure. It is diagnostic only — the heartbeat stays the arbiter, since a green `--check` with no
+heartbeat is still an outage.
 Exit 3 means "outage detected, alert raised" — the unit declares `SuccessExitStatus=0 3` so
 systemd does not read a working watchdog as a failed one. Alerting still goes through GitHub
 Issues, which is unaffected by `actions/permissions.enabled = false`.

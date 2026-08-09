@@ -449,6 +449,13 @@ jobs:
   # re-running the deployer that produced them — but there is no shell on this host (see the
   # header), so the repair had no channel. This mode is that channel.
   #
+  # It also installs the off-Actions watchdog timer (#361): enforcement-drift-check.yml reported
+  # "actions-watchdog heartbeat missing or stale" on 2026-08-09 (run 31340529325) as the last
+  # remaining drift after a PASSING repair-install, and that timer had no repair channel either —
+  # for exactly the reason it exists. It must NOT become a workflow (a repo-level Actions disable
+  # would silence the one detector of a repo-level Actions disable, #197), but it can be INSTALLED
+  # by one, from canon, the same way the brain-sync timer already is.
+  #
   # It writes to ~/.claude/{hooks,agents} and ~/.config/systemd/user ONLY. It does not write, sync,
   # commit or push ~/agent-memory — brain-sync.js is deliberately absent from this job — and it
   # proves that at the end by comparing the brain's HEAD before and after.
@@ -460,8 +467,9 @@ jobs:
   # workspace-relative is ever baked into the installed state, and the fresh checkout is exactly
   # the source of truth we want them reading.
   #
-  # install-brain-sync-timer.sh runs from the CANONICAL checkout $HOME/dev/AgentSystem instead.
-  # That script derives REPO_ROOT from its own BASH_SOURCE directory and bakes it into the unit's
+  # install-brain-sync-timer.sh and install-actions-watchdog.sh run from the CANONICAL checkout
+  # $HOME/dev/AgentSystem instead.
+  # Each derives REPO_ROOT from its own BASH_SOURCE directory and bakes it into the unit's
   # `ExecStart=` and `WorkingDirectory=`. Installing it from the runner workspace would write a
   # unit pointing at a transient path that actions/checkout rewrites on the next run — precisely
   # the stale-unit failure its own --check exists to catch ("a task pointing at a moved or deleted
@@ -785,6 +793,13 @@ jobs:
           out '```'
 
           out ""
+          out "### watchdog — bash tools/install-actions-watchdog.sh --check"
+          out '```'
+          run bash "$WS/tools/install-actions-watchdog.sh" --check
+          out "exit $?"
+          out '```'
+
+          out ""
           out "### routines — node tools/routines.js verify (INFORMATIONAL ONLY, see AFTER)"
           out '```'
           run "$NODE" "$WS/tools/routines.js" verify
@@ -795,9 +810,9 @@ jobs:
           exit 0
 
       # ── ACTIONS ──────────────────────────────────────────────────────────────────────────────
-      # Each of these three tools is idempotent: on an already-repaired host they report "no
+      # Each of these four tools is idempotent: on an already-repaired host they report "no
       # changes" and exit 0, which is what makes a second dispatch of this mode a no-op.
-      - name: ACTIONS — deploy hooks, sync agent defs, install the memory sync timer
+      - name: ACTIONS — deploy hooks, sync agent defs, install the memory sync + watchdog timers
         shell: bash
         run: |
           set +e
@@ -814,7 +829,7 @@ jobs:
           out "## ACTIONS"
 
           out ""
-          out "### 1/3 node tools/deploy-hooks.js   (source: workspace)"
+          out "### 1/4 node tools/deploy-hooks.js   (source: workspace)"
           out '```'
           run "$NODE" "$WS/tools/deploy-hooks.js"
           s=$?
@@ -826,7 +841,7 @@ jobs:
           fi
 
           out ""
-          out "### 2/3 node tools/sync-agents.js    (source: workspace; also writes the tracked .agents/sync.log)"
+          out "### 2/4 node tools/sync-agents.js    (source: workspace; also writes the tracked .agents/sync.log)"
           out '```'
           run "$NODE" "$WS/tools/sync-agents.js"
           s=$?
@@ -838,7 +853,7 @@ jobs:
           fi
 
           out ""
-          out "### 3/3 bash tools/install-brain-sync-timer.sh   (source: CANONICAL checkout, not the workspace)"
+          out "### 3/4 bash tools/install-brain-sync-timer.sh   (source: CANONICAL checkout, not the workspace)"
           UID_N="$(id -u)"
           USER_N="$(id -un)"
           out '```'
@@ -897,17 +912,69 @@ jobs:
               ;;
           esac
 
+          # ── 4/4 the off-Actions watchdog timer (#361) ──────────────────────────────────────
+          #
+          # Same CANONICAL-checkout rule as 3/4, for the same reason: install-actions-watchdog.sh
+          # derives REPO_ROOT from its own BASH_SOURCE directory and bakes it into ExecStart= and
+          # WorkingDirectory=. Installed from $GITHUB_WORKSPACE it would write a unit pointing at a
+          # path actions/checkout rewrites on the next run — a timer that looks healthy in
+          # `systemctl status` and runs a script that is not there.
+          #
+          # This step does NOT export GH_TOKEN, and must not: the installer's own gh guard is the
+          # only thing standing between us and a timer that fires hourly against an unauthenticated
+          # gh, fails hourly, and stamps no heartbeat — which is indistinguishable from #361 itself.
+          # A token injected here would prove authentication the unit will never have.
+          #
+          # The environment set up in 3/4 (linger, the exported user bus, node on PATH) is still in
+          # scope — same shell, same step — and is exactly what this installer needs too.
+          out ""
+          out "### 4/4 bash tools/install-actions-watchdog.sh   (source: CANONICAL checkout, not the workspace)"
+          out '```'
+          out "installing from $CANON  (its path is baked into the unit ExecStart=)"
+          run bash "$CANON/tools/install-actions-watchdog.sh"
+          WATCHDOG_RC=$?
+          out "exit $WATCHDOG_RC"
+          out '```'
+          echo "WATCHDOG_RC=$WATCHDOG_RC" >> "$GITHUB_ENV"
+
+          # Contract (tools/install-actions-watchdog.sh header): 0 = units written AND the timer is
+          # enabled and active. 4 = units written but the user bus was unreachable or `enable --now`
+          # failed. 5 = gh missing or unauthenticated, so it refused to write anything. Anything
+          # else = the units could not be written.
+          case "$WATCHDOG_RC" in
+            0)
+              out ""
+              out "watchdog timer installed and enabled. The AFTER step verifies it with --check,"
+              out "whose liveness half must also pass."
+              ;;
+            4)
+              out ""
+              out "WATCHDOG TIMER NOT RUNNING (exit 4). The units are on disk but were never enabled."
+              out "The AFTER step proves the units landed with --check-units and then FAILS this job."
+              ;;
+            5)
+              out ""
+              out "WATCHDOG NOT INSTALLED (exit 5) — gh is missing or unauthenticated for $USER_N, so"
+              out "the installer refused to write units it knows could never stamp a heartbeat."
+              out "The AFTER step FAILS this job and prints the human command."
+              ;;
+            *)
+              echo "::error::install-actions-watchdog.sh exited $WATCHDOG_RC — the units could not be written at all"
+              rc=1
+              ;;
+          esac
+
           exit "$rc"
 
       # ── AFTER + VERDICT ──────────────────────────────────────────────────────────────────────
       #
-      # Gated on the three things this mode actually repairs. `routines.js verify` runs too, but is
+      # Gated on the four things this mode actually repairs. `routines.js verify` runs too, but is
       # reported as INFORMATIONAL and does not gate: a routines/workflow mismatch is a repo-side
       # code change (an entry in config/routines.yml against a job in scheduled-tasks.yml), and
       # nothing this job runs on the host can fix one. Gating on it would leave repair-install
       # permanently red for a reason it is structurally unable to address, and a mode that is
       # always red is a mode nobody reads.
-      - name: AFTER — re-run all four checks, prove the brain is untouched, then verdict
+      - name: AFTER — re-run every check, prove the brain is untouched, then verdict
         if: always()
         shell: bash
         run: |
@@ -990,6 +1057,71 @@ jobs:
             out '```'
           fi
 
+          # ── the off-Actions watchdog timer (#361) ────────────────────────────────────────────
+          #
+          # Run from the workspace, matching enforcement-drift-check.yml, and gating for the same
+          # reason the brain-sync timer gates: this mode installed it, so this mode has to prove it.
+          # --check asserts the units by MEANING (both ExecStart scripts on disk, SuccessExitStatus
+          # intact, the timer repeats, gh can authenticate, the timer is active), which is safe
+          # across the workspace/canon path difference and is strictly more than the daily job can
+          # see. enforcement-drift-check.yml only observes this timer through the heartbeat
+          # actions-watchdog.js stamps into ~/agent-memory, and "heartbeat missing or stale" is one
+          # message covering four different faults (#361). A green here names which of them is
+          # cleared; it is NOT itself a heartbeat, and the daily check stays the arbiter — the first
+          # stamp only appears after the timer's OnBootSec=5min elapses, which is usually after this
+          # job has finished.
+          out ""
+          out "### watchdog — bash tools/install-actions-watchdog.sh --check   [GATING]"
+          out '```'
+          run bash "$WS/tools/install-actions-watchdog.sh" --check
+          s=$?
+          out "exit $s"
+          out '```'
+          if [ "$s" -ne 0 ]; then
+            echo "::error::actions-watchdog timer drift is STILL present after running the installer"
+            gate=1
+          fi
+
+          # Exit 4: units exist, nothing enabled them. Prove the units really landed (--check-units
+          # skips the liveness and gh halves), then fail anyway. Reporting success for a timer that
+          # is not scheduled is the exact false-green this mode exists to end — and this timer is the
+          # ONLY detector that survives a repo-level Actions disable (#197), so a silent one leaves
+          # the whole repo with no liveness check at all.
+          if [ "${WATCHDOG_RC:-0}" = "4" ]; then
+            out ""
+            out "### watchdog units on disk — --check-units (liveness half skipped)"
+            out '```'
+            run bash "$WS/tools/install-actions-watchdog.sh" --check-units
+            u=$?
+            out "exit $u"
+            out '```'
+            if [ "$u" -ne 0 ]; then
+              echo "::error::install-actions-watchdog.sh exited 4 AND the units are not on disk — it wrote nothing usable"
+            fi
+            gate=1
+            echo "::error::the actions-watchdog timer is NOT running. The units were written to ~/.config/systemd/user/actions-watchdog.{service,timer} but the systemd --user bus was unreachable from the runner service context, so enable --now never happened. A human must run this at a console on $(hostname) as ${TIMER_USER:-the runner user}: loginctl enable-linger ${TIMER_USER:-<user>} && systemctl --user daemon-reload && systemctl --user enable --now actions-watchdog.timer"
+            out ""
+            out "HUMAN ACTION REQUIRED — run this at a console on $(hostname) as ${TIMER_USER:-the runner user}:"
+            out '```'
+            out "loginctl enable-linger ${TIMER_USER:-<user>} && systemctl --user daemon-reload && systemctl --user enable --now actions-watchdog.timer"
+            out '```'
+          fi
+
+          # Exit 5: gh is missing or unauthenticated for the runner user, so the installer wrote
+          # nothing. Nothing dispatched from Actions can fix that — a token handed to this job dies
+          # with it, and the unit runs later with only PATH and HOME. So make the failure actionable
+          # rather than faking a green: name the exact console command. The daily
+          # enforcement-drift-check keeps the #361 human-needed alert open until a heartbeat appears.
+          if [ "${WATCHDOG_RC:-0}" = "5" ]; then
+            gate=1
+            echo "::error::the actions-watchdog timer could NOT be installed: gh is missing or unauthenticated for ${TIMER_USER:-the runner user} on $(hostname). Both watchdogs shell out to gh, so a timer installed anyway would fail every hour and stamp no heartbeat — indistinguishable from the fault this repair is meant to clear. A human must run this at a console: gh auth login   (then re-dispatch repair-install)"
+            out ""
+            out "HUMAN ACTION REQUIRED — run this at a console on $(hostname) as ${TIMER_USER:-the runner user}, then re-dispatch repair-install:"
+            out '```'
+            out "gh auth login"
+            out '```'
+          fi
+
           out ""
           out "### routines — node tools/routines.js verify   [INFORMATIONAL ONLY — does not gate]"
           out "repair-install cannot fix a routines/workflow mismatch; that is a repo-side code change."
@@ -1031,7 +1163,7 @@ jobs:
             git -C "$BRAIN" log --oneline "${BRAIN_HEAD_BEFORE:-HEAD}..$HEAD_A" 2>&1 | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
             out '```'
             if [ "${TIMER_RC:-0}" = "0" ]; then
-              out "EXPECTED: the timer this job enabled elapsed immediately (OnBootSec=2min, host booted long ago) and ran its first sync. Not a failure."
+              out "EXPECTED: the timer this job enabled elapsed immediately (OnBootSec=2min, host booted long ago) and ran its first sync. Not a failure. The watchdog timer this job also enabled writes a heartbeat file into the brain on its own first run (#313), so that file appearing in these commits is expected too."
             else
               gate=1
               echo "::error::~/agent-memory HEAD moved during this job (${BRAIN_HEAD_BEFORE:-?} -> $HEAD_A) and TIMER_RC=${TIMER_RC:-?}, so the brain-sync timer was NOT enabled and cannot account for it. Nothing in this job writes the brain. Explain the commits above before trusting this run."
@@ -1040,7 +1172,7 @@ jobs:
 
           out ""
           if [ "$gate" -eq 0 ]; then
-            out "## VERDICT: PASS — hooks, agent definitions and the memory sync timer are all in sync on $(hostname). This job wrote nothing into ~/agent-memory; if its HEAD moved, the block above names the commits and the timer that produced them."
+            out "## VERDICT: PASS — hooks, agent definitions, the memory sync timer and the off-Actions watchdog timer are all in sync on $(hostname). This job wrote nothing into ~/agent-memory; if its HEAD moved, the block above names the commits and the timer that produced them."
           else
             out "## VERDICT: FAIL — see the ::error:: annotations above. Re-read BEFORE vs AFTER to see what the repair did and did not move."
           fi

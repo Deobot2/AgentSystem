@@ -114,8 +114,16 @@ jobs:
           # watchdog having fired at all.
           if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/actions-watchdog.js" --check-heartbeat; then
             echo "FAILED: actions-watchdog heartbeat is missing or stale"
+            # A missing heartbeat is one message covering four different faults: never installed,
+            # units present but never enabled, units pointing at a checkout that moved, or gh
+            # unauthenticated so every run dies before the stamp (#361). The installer's own --check
+            # names which. Diagnostic only — it never clears or adds drift, because the heartbeat is
+            # the arbiter and a --check that passes while no heartbeat exists is still an outage.
+            echo "--- cause, from tools/install-actions-watchdog.sh --check ---"
+            bash "${{ github.workspace }}/tools/install-actions-watchdog.sh" --check || true
+            echo "--- end cause ---"
             driftFound=1
-            results="${results}• actions-watchdog heartbeat missing or stale — the hourly timer may be dead (tools/actions-watchdog.js --check-heartbeat)\n"
+            results="${results}• actions-watchdog heartbeat missing or stale — the hourly timer may be dead (tools/actions-watchdog.js --check-heartbeat; cause in the job log from tools/install-actions-watchdog.sh --check; repair by dispatching runner-maintenance.yml -f mode=repair-install)\n"
           else
             echo "PASSED: actions-watchdog heartbeat is fresh"
           fi
