@@ -169,6 +169,53 @@ jobs:
 
           echo "status mode changed nothing."
 
+      # The same canon diagnostics repair-install's preflight prints, minus every mutation: no
+      # fetch (which would write remote refs into a checkout this mode promises not to touch), no
+      # merge, no repair. `status` exists so a human can see the state BEFORE deciding to dispatch
+      # a repair, and canon's state is half of what decides that — a repair-install dispatched
+      # against a canon that does not exist cannot succeed, and the answer should not cost a run.
+      - name: Report the canonical checkout state (read-only, no fetch)
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          CANON="$HOME/dev/AgentSystem"
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+
+          out ""
+          out "### Canonical checkout \`$CANON\` (source for the brain-sync systemd unit)"
+          out '```'
+          CANON_EXISTS=no
+          [ -e "$CANON" ] && CANON_EXISTS=yes
+          out "canon exists       $CANON_EXISTS"
+
+          CANON_IS_GIT=no
+          if [ "$CANON_EXISTS" = yes ] && git -C "$CANON" rev-parse --git-dir >/dev/null 2>&1; then
+            CANON_IS_GIT=yes
+          fi
+          out "canon is git       $CANON_IS_GIT"
+
+          if [ "$CANON_IS_GIT" = yes ]; then
+            out "canon branch       $(git -C "$CANON" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+            out "canon HEAD         $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null || echo '?')"
+            out "canon dirty paths  $(git -C "$CANON" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            out "canon origin url   $(git -C "$CANON" remote get-url origin 2>/dev/null || echo '<no origin remote>')"
+          fi
+
+          if [ -f "$CANON/tools/brain-sync-run.js" ]; then
+            out "brain-sync-run.js  present"
+          else
+            out "brain-sync-run.js  ABSENT — repair-install will refuse until this is true"
+            out "                   (added by PR #341; absent usually means canon predates it)"
+          fi
+          out '```'
+          out ""
+          out "_No fetch was run against the canonical checkout: \`status\` mutates nothing, and even a"
+          out "fetch writes remote refs. Dispatch \`repair-install\` for the bounded ff-only self-heal._"
+
+          echo "canon report changed nothing."
+
   # ── repair-brain ───────────────────────────────────────────────────────────────────────────
   #
   # The dangerous one. The runner's ~/agent-memory may hold commits that exist on NO other host —
@@ -418,8 +465,32 @@ jobs:
   # the stale-unit failure its own --check exists to catch ("a task pointing at a moved or deleted
   # checkout, which looks perfectly healthy in systemctl status"). If the canonical checkout is
   # missing, this job FAILS rather than falling back; a silent fallback is how you install a timer
-  # that reports healthy and never runs. The canonical checkout is READ ONLY here — no fetch, no
-  # pull, no checkout; its branch/HEAD/dirty count are printed as evidence and nothing more.
+  # that reports healthy and never runs.
+  #
+  # ── Why the preflight prints before it decides, and heals within a hard boundary ──────────────
+  #
+  # The first repair-install dispatch (run 31338981940) died in the preflight with "brain-sync-run.js
+  # is missing, so the canonical checkout is not usable", and every echo describing the canon sat
+  # BELOW that fatal check. So the run proved the file was absent and said nothing about WHY —
+  # missing directory, not a git checkout, wrong remote, or (the likely answer) a clone predating
+  # PR #341, which is what added tools/brain-sync-run.js. Three very different human actions, no
+  # evidence to choose between them. Evidence first, verdict second: the diagnostics below are
+  # unconditional and run before anything can exit.
+  #
+  # The stale-clone case is also the one this job can fix itself, so in repair-install mode ONLY it
+  # does — inside a boundary chosen so it can never destroy work:
+  #
+  #   * ONLY when canon is a git checkout, ON `main`, with ZERO dirty paths. A working tree a person
+  #     may be mid-edit in is not something a dispatched job gets to rewrite.
+  #   * ONLY `fetch` + `merge --ff-only`. A fast-forward cannot discard a commit. `reset --hard`,
+  #     `checkout --`, `clean -fd` and `stash` are absent on purpose, exactly as in repair-brain.
+  #   * On any other state — dirty, another branch, not a checkout, or an ff-only that refuses
+  #     because canon has diverged — it prints precisely which and stops for a human. It does not
+  #     escalate to a stronger command.
+  #
+  # This is CODE only. ~/agent-memory is untouched by the heal, as it is by the rest of this job.
+  # `status` mode carries the same diagnostics with no fetch and no merge at all, so a human can
+  # read canon's state without dispatching a repair.
   #
   # The --check invocations, by contrast, all run from the workspace, matching
   # enforcement-drift-check.yml exactly — so a green AFTER here is a direct prediction that
@@ -456,31 +527,132 @@ jobs:
           echo "Resolved node: $NODE_PATH"
           echo "node_path=$NODE_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Preflight — locate the canonical checkout, refuse to guess
+      - name: Preflight — diagnose the canonical checkout, then heal it within a hard boundary
         id: pre
         shell: bash
         run: |
+          # `set +e` first and deliberately, same reason as the BEFORE step: GitHub invokes this as
+          # `bash -e -o pipefail`, and under that inherited -e the FIRST probe to exit nonzero — a
+          # `git -C` against a path that is not a checkout is the obvious one — would kill the step
+          # mid-diagnosis. That is precisely the evidence-free failure this step was rewritten to
+          # end. Every verdict below is an explicit `fatal`, never an incidental exit code.
+          set +e
           set -uo pipefail
           NODE='${{ steps.tools.outputs.node_path }}'
-          if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then
-            echo "::error::could not resolve a node binary on this runner; every step below needs one"
-            exit 1
-          fi
-
           CANON="$HOME/dev/AgentSystem"
-          if [ ! -f "$CANON/tools/brain-sync-run.js" ]; then
-            echo "::error::$CANON/tools/brain-sync-run.js is missing, so the canonical checkout is not usable. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace: that path is rewritten by actions/checkout, and the resulting unit would point at a directory that no longer exists while still looking healthy in systemctl status. Restore or re-clone $CANON on this host, then re-dispatch repair-install."
-            exit 1
+
+          out() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          fatal() { echo "::error::$1"; exit 1; }
+
+          # ── EVIDENCE ─────────────────────────────────────────────────────────────────────────
+          # Unconditional and first. Nothing here may exit, so a failing preflight still leaves a
+          # human enough to tell "no directory" from "stale clone" from "wrong remote".
+          out "## repair-install preflight on $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          out ""
+          out "### canonical checkout diagnostics (printed BEFORE any verdict)"
+          out '```'
+          out "node               ${NODE:-<unresolved>}"
+          out "workspace          $GITHUB_WORKSPACE   (source for deploy-hooks + sync-agents)"
+          out "canonical repo     $CANON   (source for the systemd unit)"
+
+          CANON_EXISTS=no
+          [ -e "$CANON" ] && CANON_EXISTS=yes
+          out "canon exists       $CANON_EXISTS"
+
+          CANON_IS_GIT=no
+          if [ "$CANON_EXISTS" = yes ] && git -C "$CANON" rev-parse --git-dir >/dev/null 2>&1; then
+            CANON_IS_GIT=yes
+          fi
+          out "canon is git       $CANON_IS_GIT"
+
+          CANON_BRANCH='?'
+          CANON_DIRTY='?'
+          CANON_ORIGIN='<unknown>'
+          if [ "$CANON_IS_GIT" = yes ]; then
+            CANON_BRANCH="$(git -C "$CANON" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+            CANON_DIRTY="$(git -C "$CANON" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            CANON_ORIGIN="$(git -C "$CANON" remote get-url origin 2>/dev/null || echo '<no origin remote>')"
+            out "canon branch       $CANON_BRANCH"
+            out "canon HEAD         $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null || echo '?')"
+            out "canon dirty paths  $CANON_DIRTY"
+            out "canon origin url   $CANON_ORIGIN"
           fi
 
+          SYNC_RUN=absent
+          [ -f "$CANON/tools/brain-sync-run.js" ] && SYNC_RUN=present
+          out "brain-sync-run.js  $SYNC_RUN   (tools/brain-sync-run.js, added by PR #341)"
+          out '```'
+
+          # ── VERDICTS ─────────────────────────────────────────────────────────────────────────
+          if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then
+            fatal "could not resolve a node binary on this runner; every step below needs one"
+          fi
+
+          if [ "$CANON_EXISTS" != yes ]; then
+            fatal "$CANON does not exist on this host at all — this is not a stale clone, there is nothing there. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace, whose path actions/checkout rewrites every run. Clone the repo to $CANON on this host, then re-dispatch repair-install."
+          fi
+
+          if [ "$CANON_IS_GIT" != yes ]; then
+            fatal "$CANON exists but is not a git checkout, so this job cannot update it and will not guess what it is. Inspect it on the host; if it is a stray directory, move it aside and clone the repo to $CANON, then re-dispatch repair-install."
+          fi
+
+          # ── SELF-HEAL (bounded) ──────────────────────────────────────────────────────────────
+          # Clean `main` only, fetch + ff-only only. See the job header for why the boundary is
+          # drawn exactly here. No reset, no checkout, no clean, no stash, no force — a
+          # fast-forward is the only git operation that cannot discard a commit. Code only:
+          # ~/agent-memory is not involved.
+          out ""
+          out "### canon self-heal — fetch + merge --ff-only (clean \`main\` only)"
+          out '```'
+          HEALED=skipped
+          HEAL_WHY=""
+          if [ "$CANON_BRANCH" != "main" ]; then
+            HEAL_WHY="canon is on branch '$CANON_BRANCH', not main"
+            out "SKIPPED — $HEAL_WHY. This job does not switch branches on a checkout it does not own."
+          elif [ "$CANON_DIRTY" != "0" ]; then
+            HEAL_WHY="canon has $CANON_DIRTY dirty path(s); someone may be mid-edit"
+            out "SKIPPED — $HEAL_WHY. Rewriting that tree from a dispatch is not acceptable."
+            git -C "$CANON" status --porcelain 2>/dev/null | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            out "HEAD before   $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null)"
+            FETCH_OUT="$(git -C "$CANON" fetch --quiet origin main 2>&1)"; FETCH_RC=$?
+            [ -n "$FETCH_OUT" ] && out "$FETCH_OUT"
+            if [ "$FETCH_RC" -ne 0 ]; then
+              HEALED=failed
+              HEAL_WHY="git fetch origin main failed in $CANON (exit $FETCH_RC) — no network, no credentials, or origin ($CANON_ORIGIN) is unreachable from this host"
+              out "FAILED — $HEAL_WHY"
+            else
+              MERGE_OUT="$(git -C "$CANON" merge --ff-only origin/main 2>&1)"; MERGE_RC=$?
+              [ -n "$MERGE_OUT" ] && out "$MERGE_OUT"
+              if [ "$MERGE_RC" -ne 0 ]; then
+                HEALED=failed
+                HEAL_WHY="git merge --ff-only origin/main refused (exit $MERGE_RC) — canon has commits that are not on origin/main, so it cannot fast-forward. NOTHING was forced"
+                out "FAILED — $HEAL_WHY"
+              else
+                HEALED=yes
+                out "OK — fast-forwarded (or already up to date)"
+              fi
+            fi
+            out "HEAD after    $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null)"
+          fi
+          out "result        $HEALED"
+          out '```'
+
+          # ── RE-TEST, only now ────────────────────────────────────────────────────────────────
+          # A file still missing after a SUCCESSFUL ff-only pull is a categorically different fault
+          # from a stale clone, and gets its own message so nobody re-runs the same repair twice.
+          if [ ! -f "$CANON/tools/brain-sync-run.js" ]; then
+            if [ "$HEALED" = yes ]; then
+              fatal "the ff-only pull of $CANON SUCCEEDED and $CANON/tools/brain-sync-run.js is STILL missing. This is NOT a stale clone — a checkout in step with origin/main would have that file (PR #341). Something else is wrong with $CANON: its origin is '$CANON_ORIGIN' and may not be this repository, or it is a sparse/partial checkout that excludes tools/. Inspect it on the host and re-clone if it is the wrong repo, then re-dispatch repair-install."
+            fi
+            fatal "$CANON/tools/brain-sync-run.js is missing and the self-heal could not fix it: $HEAL_WHY. install-brain-sync-timer.sh bakes its own directory into the unit ExecStart=, and this job will NOT fall back to the runner workspace: that path is rewritten by actions/checkout, and the resulting unit would point at a directory that no longer exists while still looking healthy in systemctl status. Resolve the state above on the host by hand (the heal only ever runs fetch + merge --ff-only on a clean main, on purpose), then re-dispatch repair-install."
+          fi
+
+          out ""
+          out "brain-sync-run.js present after preflight — proceeding."
           echo "canon_root=$CANON" >> "$GITHUB_OUTPUT"
-          echo "node:              $NODE"
-          echo "workspace:         $GITHUB_WORKSPACE   (source for deploy-hooks + sync-agents)"
-          echo "canonical repo:    $CANON   (source for the systemd unit; read only)"
-          echo "canon branch:      $(git -C "$CANON" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-          echo "canon HEAD:        $(git -C "$CANON" log -1 --format='%h %ad %s' --date=iso 2>/dev/null || echo '?')"
-          echo "canon dirty paths: $(git -C "$CANON" status --porcelain 2>/dev/null | wc -l)"
-          echo "(the canonical checkout is not modified by this job: no fetch, no pull, no checkout)"
+          echo "canon_healed=$HEALED" >> "$GITHUB_OUTPUT"
+          exit 0
 
       # ── BEFORE ───────────────────────────────────────────────────────────────────────────────
       # Nothing here may fail the job. The whole point is to photograph the drift that the repair
