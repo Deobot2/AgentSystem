@@ -13,36 +13,24 @@
 //   unbypass <id>       — remove override from routine-overrides.json
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainModule } from './is-main.js';
+import overrideState from '../hooks/lib/override-state.cjs';
+
+// Default-import + destructure: robust CJS interop regardless of whether named static
+// analysis of the .cjs file succeeds in every consumer's toolchain.
+const { isOverrideActive, resolveOverridesPath } = overrideState;
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const ROUTINES_YML = join(REPO_ROOT, 'config', 'routines.yml');
 const GENERATED_MD = join(REPO_ROOT, '.agents', 'rules', 'routines.generated.md');
-const OVERRIDES_PATH = join(homedir(), 'agent-memory', 'nexus', 'routine-overrides.json');
 const SCHEDULED_YML = join(REPO_ROOT, '.github', 'workflows', 'scheduled-tasks.yml');
 
-// ---------------------------------------------------------------------------
-// Session bypass expiry check — determines if an override is still active.
-// Duplicated in hooks/routines-context-inject.js — keep in sync with that copy.
-// Both copies follow the same logic for consistency across read paths:
-// - If override.session is falsy, it's permanent (always active)
-// - If override.session is true:
-//   - If override.sessionId is missing/falsy, treat as NOT active (fail-closed)
-//   - If override.sessionId matches currentSessionId, it's active
-//   - Otherwise, it's expired (not active in a new session)
-// ---------------------------------------------------------------------------
-function isOverrideActive(override, currentSessionId) {
-  if (!override || !override.bypassed) return false;
-  // Non-session bypasses (session: false or absent) are always active (permanent)
-  if (!override.session) return true;
-  // Session-scoped bypass: only active if sessionId matches
-  // Missing/null sessionId is treated as NOT active (fail-closed)
-  return override.sessionId === currentSessionId && currentSessionId;
-}
+// Resolved lazily (not cached at module load) so that a test importing this module in-process can
+// still redirect AGENT_ROUTINE_OVERRIDES_PATH per-call — e.g. dispatchRoutines() called multiple
+// times in one process with different env setups (see tools/routines.test.js).
 
 // ---------------------------------------------------------------------------
 // Minimal YAML parser — handles the constrained routines.yml format only.
@@ -136,15 +124,16 @@ function setEnabledInYml(text, id, value) {
 // ---------------------------------------------------------------------------
 function readOverrides() {
   try {
-    return JSON.parse(readFileSync(OVERRIDES_PATH, 'utf8'));
+    return JSON.parse(readFileSync(resolveOverridesPath(), 'utf8'));
   } catch {
     return {};
   }
 }
 
 function writeOverrides(overrides) {
-  mkdirSync(join(homedir(), 'agent-memory', 'nexus'), { recursive: true });
-  writeFileSync(OVERRIDES_PATH, JSON.stringify(overrides, null, 2) + '\n', 'utf8');
+  const overridesPath = resolveOverridesPath();
+  mkdirSync(dirname(overridesPath), { recursive: true });
+  writeFileSync(overridesPath, JSON.stringify(overrides, null, 2) + '\n', 'utf8');
 }
 
 // ---------------------------------------------------------------------------

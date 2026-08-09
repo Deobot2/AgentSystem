@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parseRoutinesYml, dispatchRoutines, verifyCronRoutines } from './routines.js';
 
 // --- parseRoutinesYml ---
@@ -128,6 +130,74 @@ test('parseRoutinesYml filter: disabled routine not included', () => {
   // always-worktree is enabled, disabled-rule is not
   assert.strictEqual(matched.length, 1);
   assert.strictEqual(matched[0].id, 'always-worktree');
+});
+
+// --- dispatchRoutines (real export, not the inline-filter re-implementation above) ---
+//
+// tools/routines.test.js previously imported dispatchRoutines() (line 4) but never called it —
+// its tests only exercised a plain .filter() copy-pasted from the function's body. That let
+// dispatchRoutines() itself go untested, which is how the (mistaken) bug report that it "passes
+// hardcoded null as currentSessionId" went unchallenged: nothing actually invoked the function to
+// check. These tests call the real export against the live config/routines.yml (same pattern the
+// #200 cron tests already use below) and a throwaway overrides file pointed at by
+// AGENT_ROUTINE_OVERRIDES_PATH, which tools/routines.js now resolves through at runtime.
+//
+// Fixture routine: `auto-resolve-pr-comments` — mechanism: hook, trigger: pr_create, enabled: true
+// in the live registry. If that routine is ever renamed/disabled, update this id.
+const DISPATCH_TEST_ROUTINE_ID = 'auto-resolve-pr-comments';
+const DISPATCH_TMP_DIR = join(tmpdir(), 'agentsystem-dispatch-test-' + process.pid);
+const DISPATCH_OVERRIDES_PATH = join(DISPATCH_TMP_DIR, 'routine-overrides.json');
+
+function writeDispatchOverride(override) {
+  mkdirSync(DISPATCH_TMP_DIR, { recursive: true });
+  writeFileSync(DISPATCH_OVERRIDES_PATH, JSON.stringify({ [DISPATCH_TEST_ROUTINE_ID]: override }, null, 2) + '\n', 'utf8');
+}
+
+function withDispatchEnv(env, fn) {
+  const prevOverridesPath = process.env.AGENT_ROUTINE_OVERRIDES_PATH;
+  const prevSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.AGENT_ROUTINE_OVERRIDES_PATH = DISPATCH_OVERRIDES_PATH;
+  if (env.sessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = env.sessionId;
+  try {
+    return fn();
+  } finally {
+    if (prevOverridesPath === undefined) delete process.env.AGENT_ROUTINE_OVERRIDES_PATH;
+    else process.env.AGENT_ROUTINE_OVERRIDES_PATH = prevOverridesPath;
+    if (prevSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = prevSessionId;
+    rmSync(DISPATCH_TMP_DIR, { recursive: true, force: true });
+  }
+}
+
+test('dispatchRoutines: a session bypass with matching CLAUDE_CODE_SESSION_ID suppresses the routine', () => {
+  writeDispatchOverride({ bypassed: true, session: true, sessionId: 'session-A', at: new Date().toISOString() });
+  const matched = withDispatchEnv({ sessionId: 'session-A' }, () =>
+    dispatchRoutines({ event: 'PostToolUse', context: {} }));
+  assert.ok(
+    !matched.some(r => r.id === DISPATCH_TEST_ROUTINE_ID),
+    `expected ${DISPATCH_TEST_ROUTINE_ID} suppressed by matching session bypass, got: ${matched.map(r => r.id).join(', ')}`,
+  );
+});
+
+test('dispatchRoutines: a session bypass with a mismatched CLAUDE_CODE_SESSION_ID does NOT suppress (fails closed)', () => {
+  writeDispatchOverride({ bypassed: true, session: true, sessionId: 'session-A', at: new Date().toISOString() });
+  const matched = withDispatchEnv({ sessionId: 'session-B' }, () =>
+    dispatchRoutines({ event: 'PostToolUse', context: {} }));
+  assert.ok(
+    matched.some(r => r.id === DISPATCH_TEST_ROUTINE_ID),
+    `expected ${DISPATCH_TEST_ROUTINE_ID} still dispatched (bypass expired), got: ${matched.map(r => r.id).join(', ')}`,
+  );
+});
+
+test('dispatchRoutines: a session bypass with no CLAUDE_CODE_SESSION_ID set does NOT suppress (fails closed)', () => {
+  writeDispatchOverride({ bypassed: true, session: true, sessionId: 'session-A', at: new Date().toISOString() });
+  const matched = withDispatchEnv({ sessionId: undefined }, () =>
+    dispatchRoutines({ event: 'PostToolUse', context: {} }));
+  assert.ok(
+    matched.some(r => r.id === DISPATCH_TEST_ROUTINE_ID),
+    `expected ${DISPATCH_TEST_ROUTINE_ID} still dispatched (no session id to match), got: ${matched.map(r => r.id).join(', ')}`,
+  );
 });
 
 // --- verifyCronRoutines (#200) ---

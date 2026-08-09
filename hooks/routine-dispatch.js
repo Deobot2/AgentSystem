@@ -21,6 +21,9 @@ const TOOLS = [
   path.join(os.homedir(), 'dev', 'AgentSystem', 'tools'),
 ].find((p) => { try { return p && fs.existsSync(path.join(p, 'auto-resolve-pr-comments.js')); } catch { return false; } });
 
+// NOTE: dispatchRoutines() in tools/routines.js is NOT wired into this hook's dispatch path below —
+// this file hardcodes its own inline pr_create detection. dispatchRoutines() exists for the
+// `list`/`compile` CLI's own bypass-awareness, not live PostToolUse/UserPromptSubmit dispatch.
 const ROUTINES_SCRIPT = path.join(TOOLS, 'routines.js');
 
 if (require.main === module) {

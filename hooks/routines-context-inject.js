@@ -6,33 +6,14 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
+const { isOverrideActive, resolveOverridesPath } = require('./lib/override-state.cjs');
 
 // Path to the compiled rules file (repo-relative from AGENT_TOOLS_ROOT/../)
 const TOOLS = process.env.AGENT_TOOLS_ROOT ||
   path.resolve(__dirname, '..', 'tools');
 const REPO_ROOT = path.resolve(TOOLS, '..');
 const GENERATED_MD = path.join(REPO_ROOT, '.agents', 'rules', 'routines.generated.md');
-const OVERRIDES_PATH = path.join(os.homedir(), 'agent-memory', 'nexus', 'routine-overrides.json');
-
-/**
- * Check if a session-scoped bypass override is still active.
- * Duplicated in tools/routines.js — keep in sync with that copy.
- * Both copies follow the same logic for consistency across read paths:
- * - If override.session is falsy, it's permanent (always active)
- * - If override.session is true:
- *   - If override.sessionId is missing/falsy, treat as NOT active (fail-closed)
- *   - If override.sessionId matches currentSessionId, it's active
- *   - Otherwise, it's expired (not active in a new session)
- */
-function isOverrideActive(override, currentSessionId) {
-  if (!override || !override.bypassed) return false;
-  // Non-session bypasses (session: false or absent) are always active (permanent)
-  if (!override.session) return true;
-  // Session-scoped bypass: only active if sessionId matches
-  // Missing/null sessionId is treated as NOT active (fail-closed)
-  return override.sessionId === currentSessionId && currentSessionId;
-}
+const OVERRIDES_PATH = resolveOverridesPath();
 
 /** Ids with an active bypass in the machine-local overrides file. */
 function bypassedIds(currentSessionId) {
