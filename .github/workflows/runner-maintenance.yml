@@ -65,7 +65,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Report the runner's brain state
         shell: bash
@@ -195,7 +195,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: runner-brain-repair-blocked
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Back up the whole brain checkout (including .git)
         shell: bash
@@ -363,7 +363,7 @@ jobs:
       issues: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Create the run-log directory
         shell: bash

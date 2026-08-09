@@ -151,7 +151,7 @@ jobs:
       # identity has push:false on this repo — the #gh-token-shadow story below, but for git rather
       # than gh. With it off, git falls through to the host's own credential helper (the same
       # repo-scoped PAT gh uses), so the skill's draft-PR pushes keep working.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -384,7 +384,7 @@ jobs:
     if: (github.event_name == 'schedule' && github.event.schedule == '0 8 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-brain-consolidation')
     runs-on: [self-hosted, Linux]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Run full memory sleep cycle
         shell: bash
         run: |
@@ -413,7 +413,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: memory-decay-down
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Memory decay (every brain under ~/agent-memory/nexus)
         shell: bash
         run: |
@@ -466,7 +466,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: trust-scores-down
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Compute trust scores
         shell: bash
         # --allow-empty is safe here and is NOT a return to the false green this job used to
@@ -527,7 +527,7 @@ jobs:
     if: (github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0') || (github.event_name == 'workflow_dispatch' && inputs.job == 'weekly-hygiene')
     runs-on: [self-hosted, Linux]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rotate jsonl logs (session-log etc.)
         shell: bash
         run: node "${{ github.workspace }}/tools/rotate-logs.js" --threshold-mb=5 --keep=3
@@ -579,7 +579,7 @@ jobs:
       # Same reasoning as daily-triage's checkout, including persist-credentials: false — see the
       # comment there. fetch-depth: 0 because the review prompt below reads "the last week of git
       # log on main", which a shallow checkout does not have.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           fetch-depth: 0

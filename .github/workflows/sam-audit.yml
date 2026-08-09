@@ -64,7 +64,7 @@ jobs:
     # early exit still emits a passing check run rather than a skipped one.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -73,7 +73,7 @@ jobs:
       # keeping the required status check green for them.
       - name: Draft / docs-only / spec precheck
         id: precheck
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -126,7 +126,7 @@ jobs:
       # exactly one definition of "Sam approved this".
       - name: Post Sam approval without audit (docs-only / spec)
         if: steps.precheck.outputs.approve == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -286,7 +286,7 @@ jobs:
       - name: Post Sam review to PR
         id: review
         if: steps.precheck.outputs.skip != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -363,7 +363,7 @@ jobs:
       # nothing here should imply more than that.
       - name: Post merge-ready ping (approved only)
         if: steps.review.outputs.status == 'approved'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

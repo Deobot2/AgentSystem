@@ -102,7 +102,7 @@ jobs:
           [ -f "$TASK_FILE" ] || printf '%s' "$ISSUE_BODY" > "$TASK_FILE"
 
       - name: Post "running" acknowledgement
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const cmd = '${{ steps.parse.outputs.command }}';
@@ -156,7 +156,7 @@ jobs:
 
       - name: Post blocked-merge comment (pr-guard failed)
         if: steps.parse.outputs.command == 'merge' && steps.guard.outputs.guard_exit != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             await github.rest.issues.createComment({
@@ -214,7 +214,7 @@ jobs:
 
       - name: Apply agent status label
         if: steps.protocol.outputs.prefix != '' && steps.protocol.outputs.prefix != 'unknown'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const prefix = '${{ steps.protocol.outputs.prefix }}';
@@ -231,7 +231,7 @@ jobs:
             }
 
       - name: Post result
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const fs = require('fs');
@@ -309,7 +309,7 @@ jobs:
 
       - name: Post failure detail
         if: steps.run_claude.outputs.exit_code != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const fs = require('fs');
@@ -326,7 +326,7 @@ jobs:
 
       - name: Remove dispatch label (reset for next use)
         if: github.event_name == 'issues'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             try {
@@ -351,7 +351,7 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
@@ -425,7 +425,7 @@ jobs:
 
       - name: Post scan result as PR comment
         if: steps.diff.outputs.empty != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const fs = require('fs');
@@ -455,7 +455,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'auto-merge-ok')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.ref }}
 

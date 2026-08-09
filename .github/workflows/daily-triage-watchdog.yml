@@ -35,7 +35,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       ALERT_KEY: daily-triage-down
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Did a daily-triage job succeed today?
         id: check
