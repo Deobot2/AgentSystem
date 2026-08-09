@@ -14,12 +14,26 @@
 ## Hooks
 Hooks do nothing until **copied** to `~/.claude/hooks/` AND **registered** under `hooks` in
 `~/.claude/settings.json`. One command does both:
-- `node tools/deploy-hooks.js` — deploy + register, idempotent
-- `node tools/deploy-hooks.js --check` — exit 1 on drift or missing registration
+- `node tools/deploy-hooks.js` — deploy + register + drop stale registrations, idempotent
+- `node tools/deploy-hooks.js --check` — exit 1 on drift, missing **or stale** registration
 
 Run after any `hooks/` change. Manifest is `HOOK_REGISTRY` in `tools/deploy-hooks.js` — add new
 hooks there. Registration was once PowerShell-only, so on Linux the whole pipeline was
-installed-but-inert; `--check` in CI is what stops that recurring.
+installed-but-inert; `--check` is what stops that recurring.
+
+Registration used to be additive-only, so a hook deleted from the repo kept firing off an invisible
+registration (#302). `--check` now also reports **stale** entries — inside `~/.claude/hooks` but not
+in `HOOK_REGISTRY`, or pointing at a file that is gone — and deploy removes them, plus the orphan
+file when a stale registration of ours attributes it. Third-party registrations (plugin hooks under
+`~/.claude/plugins/**`) are matched by path prefix and never touched. The automation is the daily
+`enforcement-drift-check` job in `scheduled-tasks.yml` on the self-hosted runner; `test.yml` does
+**not** run `--check`, because a hosted runner has no install and would only pass vacuously.
+
+A completely bare `~/.claude` makes `--check` print `no-install` and exit 0 — pass
+`--require-install` (the daily job does) on a host that is *supposed* to have hooks, so an
+un-deployed runner fails instead of reporting success. A hooks dir with **no** `settings.json` is
+never a clean skip: that is the installed-but-inert state, and every missing registration is
+reported.
 
 Hooks are Claude Code only — there is no Antigravity equivalent, so every hook-borne feature is
 inert in an `agy` session (#240). Adding a hook therefore adds an Antigravity gap: record it in

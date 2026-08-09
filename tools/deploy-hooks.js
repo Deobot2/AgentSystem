@@ -11,12 +11,20 @@
 // command does both halves.
 //
 // Usage:
-//   node tools/deploy-hooks.js           # copy changed files + register hooks
-//   node tools/deploy-hooks.js --check   # dry-run: exit 1 on any file drift or missing registration
+//   node tools/deploy-hooks.js           # copy changed files + register hooks + drop stale ones
+//   node tools/deploy-hooks.js --check   # dry-run: exit 1 on file drift, missing or stale registration
+//
+// Registration used to be additive-only, so a hook deleted from the repo kept firing forever from
+// a registration nobody could see (#302: tool-output-compress.js fired on every Bash call for two
+// weeks after being deleted from the tree). staleRegistrations() closes that: it reports — and
+// deploy removes — registrations that point inside ~/.claude/hooks but are no longer in
+// HOOK_REGISTRY, or whose target file is gone. Third-party registrations (plugin hooks under
+// ~/.claude/plugins/**) are never touched: only paths that resolve *inside* the AgentSystem hooks
+// directory are ours to manage.
 //
 // Pure Node.js builtins only (repo rule for tools/).
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -112,6 +120,9 @@ export const HOOK_REGISTRY = [
   // Bash events (see the 2026-07-12 audit notes in the retired .ps1).
   { event: 'PostToolUse',      command: b('wip-checkpoint.sh'),                 timeout: 5,  statusMessage: 'Saving checkpoint...',          matcher: 'Write|Edit|NotebookEdit' },
   { event: 'PostToolUse',      command: n('routine-dispatch.js'),               timeout: 5,  statusMessage: 'Checking routines (Bash)...',   matcher: 'Bash' },
+  // Live-but-unregistered until #302: hand-added to settings.json, so a fresh host never got the
+  // #158 session status lifecycle (started -> pr -> done) at all.
+  { event: 'PostToolUse',      command: b('pr-status-detect.sh'),               timeout: 5,  statusMessage: 'Detecting PR create...',        matcher: 'Bash' },
   // There is no tool-output-compress.js — it was deleted in 4adeab6 (2026-07-26). Its
   // implementation could only *append*, so compressing a large output meant keeping the
   // original and adding a summary on top: measured at +3218 chars on a 10,000-char payload.
@@ -131,6 +142,115 @@ const SETTINGS_DEFAULTS = { autoCompactEnabled: true, autoCompactWindow: 150000 
 
 const settingsPath = () => join(CLAUDE_HOME, 'settings.json');
 const normCmd = c => String(c).replaceAll("'", '"').replaceAll('\\', '/');
+
+/** Absolute path of the hooks directory this run manages, in comparison form. */
+export const hooksDirPath = () => HOOKS_DIR;
+
+// Git Bash writes C:\Users\x as /c/Users/x. Fold that back so both spellings of the same
+// file compare equal — the caveman plugin registers itself with a /c/... path.
+const gitBashToWin = p => p.replace(/^\/([a-zA-Z])\//, (_, d) => `${d.toUpperCase()}:/`);
+const cmpPath = p => (process.platform === 'win32' ? p.toLowerCase() : p);
+
+/**
+ * Every filesystem-path-looking token in a command string, normalised.
+ * Handles `node "C:/x/y.js"`, `bash 'C:\x\y.sh'` and bare `node /c/x/y.js` alike.
+ */
+function commandPaths(command) {
+  const tokens = normCmd(command).match(/"[^"]*"|\S+/g) ?? [];
+  return tokens.map(t => gitBashToWin(t.replace(/^"|"$/g, '')));
+}
+
+/**
+ * The file inside our hooks dir that `command` runs, or null if the command is not ours.
+ * Deliberately a path-prefix test, not a substring test: the caveman plugin's
+ * `.../plugins/cache/caveman/.../src/hooks/caveman-activate.js` contains "hooks" but does not
+ * live in ~/.claude/hooks, and must never be matched.
+ */
+export function hooksDirTarget(command) {
+  const prefix = cmpPath(HOOKS_DIR.replace(/\/$/, '') + '/');
+  for (const p of commandPaths(command)) {
+    if (cmpPath(p).startsWith(prefix)) return p;
+  }
+  return null;
+}
+
+const regKey = (event, matcher, command) => `${event}\u0000${matcher ?? ''}\u0000${normCmd(command)}`;
+
+/**
+ * Registrations in `settings` that point inside our hooks dir but should not be there:
+ * either the event+matcher+command triple is absent from HOOK_REGISTRY, or the file it runs
+ * no longer exists and the manifest will not recreate it. Anything outside the hooks dir is
+ * someone else's registration and is never reported.
+ */
+export function staleRegistrations(settings, registry = HOOK_REGISTRY, manifest = null) {
+  const out = [];
+  const hooks = settings?.hooks;
+  if (!hooks || typeof hooks !== 'object') return out;
+  const known = new Set(registry.map(e => regKey(e.event, e.matcher, e.command)));
+  const owned = new Set(
+    (manifest ?? safeManifest()).map(m => cmpPath(m.dest.replaceAll('\\', '/'))),
+  );
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const matcher = group?.matcher ?? null;
+      for (const h of group?.hooks ?? []) {
+        if (!h?.command) continue;
+        const target = hooksDirTarget(h.command);
+        if (!target) continue; // not ours
+        let reason = null;
+        if (!known.has(regKey(event, matcher, h.command))) reason = 'not in HOOK_REGISTRY';
+        else if (!existsSync(target) && !owned.has(cmpPath(target))) reason = 'target file missing';
+        else continue;
+        out.push({ event, matcher, command: h.command, target, reason });
+      }
+    }
+  }
+  return out;
+}
+
+function safeManifest() {
+  try { return buildManifest(); } catch { return []; }
+}
+
+/**
+ * Remove the stale registrations from `settings`, pruning any group and event array our removal
+ * emptied so the file does not accumulate husks. Groups we did not touch are left exactly as
+ * found, empty or not. Returns the change lines, and the set of orphan files the caller may
+ * delete (see registerHooks).
+ */
+export function removeStaleHookSettings(settings, registry = HOOK_REGISTRY, manifest = null) {
+  const stale = staleRegistrations(settings, registry, manifest);
+  if (!stale.length) return { changes: [], orphanFiles: [] };
+  const doomed = new Set(stale.map(s => regKey(s.event, s.matcher, s.command)));
+  const touched = new Set(stale.map(s => s.event));
+  for (const event of touched) {
+    const groups = settings.hooks[event];
+    if (!Array.isArray(groups)) continue;
+    const kept = [];
+    for (const group of groups) {
+      const matcher = group?.matcher ?? null;
+      const before = group?.hooks?.length ?? 0;
+      if (Array.isArray(group?.hooks)) {
+        group.hooks = group.hooks.filter(h => !doomed.has(regKey(event, matcher, h?.command)));
+      }
+      // Only prune a group our filter emptied — an already-empty foreign group is not ours to drop.
+      if (before > 0 && group.hooks?.length === 0) continue;
+      kept.push(group);
+    }
+    if (kept.length) settings.hooks[event] = kept;
+    else delete settings.hooks[event];
+  }
+  const owned = new Set((manifest ?? safeManifest()).map(m => cmpPath(m.dest.replaceAll('\\', '/'))));
+  // Orphan-file deletion is attribution-limited on purpose. We only delete a file when we are
+  // simultaneously removing *our own* registration that pointed at it — that registration is the
+  // evidence this deploy tool installed the file. A stray file in ~/.claude/hooks with no
+  // registration behind it could be something the user dropped there by hand, so it is left alone.
+  const orphanFiles = [...new Set(stale
+    .filter(s => !owned.has(cmpPath(s.target)) && existsSync(s.target))
+    .map(s => s.target))];
+  return { changes: stale.map(s => `${s.event}${s.matcher ? `[${s.matcher}]` : ''} -> ${s.command}  (${s.reason})`), orphanFiles };
+}
 
 /**
  * Merge HOOK_REGISTRY into a settings object. Idempotent — the command string is
@@ -167,39 +287,71 @@ function readSettings() {
 
 export function registerHooks({ dryRun = false } = {}) {
   const settings = readSettings();
-  const changes = mergeHookSettings(settings);
-  if (changes.length && !dryRun) {
+  const { changes: removed, orphanFiles } = removeStaleHookSettings(settings);
+  const added = mergeHookSettings(settings);
+  const deleted = [];
+  if ((added.length || removed.length) && !dryRun) {
     mkdirSync(CLAUDE_HOME, { recursive: true });
-    // Back up once per run before rewriting the user's live settings.
+    // Back up once per run, before the first write that touches the user's live settings.
     if (existsSync(settingsPath())) {
       writeFileSync(settingsPath() + '.bak', readFileSync(settingsPath()));
     }
     writeFileSync(settingsPath(), JSON.stringify(settings, null, 2) + '\n');
+    for (const f of orphanFiles) {
+      try { rmSync(f); deleted.push(f); } catch { /* already gone, or not ours to remove */ }
+    }
   }
-  return changes;
+  return { added, removed, orphanFiles, deleted };
 }
 
 const isMain = isMainModule(import.meta.url);
 if (isMain) {
   const check = process.argv.includes('--check');
-  const results = check ? diffManifest() : deploy();
-  let drift = 0;
-  for (const r of results) {
-    if (r.status === 'same') { if (!check) continue; }
-    else drift++;
-    console.log(`${r.status.padEnd(7)} ${r.name}${r.deployed ? '  -> deployed' : ''}`);
+  // On a host that has an install, --require-install makes "nothing here" a failure instead of a
+  // pass. The self-hosted runner is supposed to have hooks deployed, so a bare-home no-op there is
+  // itself the outage (#150's installed-but-inert, one step earlier), not a clean bill of health.
+  const requireInstall = process.argv.includes('--require-install');
+  const hasHooksDir = existsSync(HOOKS_DIR);
+  const hasSettings = existsSync(settingsPath());
+
+  // "Nothing is installed here" is not "everything is in sync". On a hosted CI runner there is no
+  // ~/.claude at all, so a --check that reported success would be the green-build-hides-a-dead-
+  // thing failure of #275/#292 all over again. Only a COMPLETELY bare home is a clean skip: a
+  // hooks dir with no settings.json is the installed-but-inert state this tool exists to catch,
+  // so that case still runs the registration half and fails on every missing entry.
+  if (check && !hasHooksDir && !hasSettings) {
+    console.log('no-install ~/.claude/hooks not found — file drift check skipped');
+    console.log('no-install ~/.claude/settings.json not found — registration check skipped');
+    if (requireInstall) {
+      console.log('\nnothing installed on this host, but --require-install was passed — treating as drift');
+      process.exit(1);
+    }
+    console.log('\nnothing installed on this host — nothing to check (logic covered by tools/deploy-hooks.test.js)');
+    process.exit(0);
   }
 
-  const changes = registerHooks({ dryRun: check });
-  for (const c of changes) console.log(`${(check ? 'unreg' : 'reg').padEnd(7)} ${c}`);
+  let drift = 0;
+  {
+    const results = check ? diffManifest() : deploy();
+    for (const r of results) {
+      if (r.status === 'same') { if (!check) continue; }
+      else drift++;
+      console.log(`${r.status.padEnd(10)} ${r.name}${r.deployed ? '  -> deployed' : ''}`);
+    }
+  }
 
-  const total = drift + changes.length;
+  const { added, removed, deleted } = registerHooks({ dryRun: check });
+  for (const c of removed) console.log(`${'stale'.padEnd(10)} ${c}`);
+  for (const f of deleted) console.log(`${'deleted'.padEnd(10)} ${f}`);
+  for (const c of added) console.log(`${(check ? 'unreg' : 'reg').padEnd(10)} ${c}`);
+
+  const total = drift + added.length + removed.length;
   if (check) {
     console.log(total
-      ? `\n${drift} file(s) drifted, ${changes.length} registration(s) missing — run: node tools/deploy-hooks.js`
+      ? `\n${drift} file(s) drifted, ${added.length} registration(s) missing, ${removed.length} stale — run: node tools/deploy-hooks.js`
       : 'in sync');
     process.exit(total ? 1 : 0);
   } else {
-    console.log(`\n${drift} file(s) deployed, ${changes.length} hook(s) registered`);
+    console.log(`\n${drift} file(s) deployed, ${added.length} hook(s) registered, ${removed.length} stale registration(s) removed`);
   }
 }

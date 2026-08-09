@@ -88,7 +88,10 @@ jobs:
           results=""
 
           echo "=== Checking hook deploy + registration drift ==="
-          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/deploy-hooks.js" --check; then
+          # --require-install: this runner is supposed to HAVE hooks deployed, so a bare
+          # ~/.claude is the outage itself, not a clean skip. Without the flag the check
+          # no-ops to exit 0 on an empty home, which is the CI home a hosted runner has.
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/deploy-hooks.js" --check --require-install; then
             echo "FAILED: Hook drift detected"
             driftFound=1
             results="${results}• Hook deploy/registration drift detected\n"

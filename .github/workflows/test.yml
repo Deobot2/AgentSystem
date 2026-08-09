@@ -26,3 +26,8 @@ jobs:
       # if a test runs locally it runs here, and adding a test file needs no CI edit.
       - name: Run all tests
         run: npm test
+
+      # Deliberately NOT running `deploy-hooks.js --check` here. ubuntu-latest has no
+      # ~/.claude/settings.json and no installed hooks, so it could only ever pass vacuously --
+      # the same green-build-hides-a-dead-thing failure as #275/#292. Real drift needs a host
+      # with hooks installed: the daily `enforcement-drift-check` job in scheduled-tasks.yml.
