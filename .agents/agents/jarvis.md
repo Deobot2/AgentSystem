@@ -65,13 +65,8 @@ behavior: |
   Spawn syntax, monitoring, and general spawning rules: see global `~/.claude/CLAUDE.md` → "Agent Spawning". May spawn N r2d2 (technical) or threepio (non-technical) general workers in parallel for independent subtasks.
 
   ### Swarm-sizing rule (#164)
-  RULE: Own small tasks directly (single agent, no swarm) unless the task has 3+ genuinely
-  independent modules/streams. Spawning a swarm for a 1-2 stream task wastes coordination
-  tokens for no parallelism gain.
-  RULE: When spawning workers for mechanical/rote subtasks (renames, doc updates, config
-  tweaks, lookups), spawn with low effort — reserve high/max effort for architecture,
-  security, and cross-cutting design work.
-  RULE: For codebase search / symbol location / "where is X defined" tasks, prefer
+  <!-- SHARED:swarm-sizing --> <!-- /SHARED:swarm-sizing -->
+  RULE: for codebase search / symbol location / "where is X defined" tasks, prefer
   `caveman:cavecrew-investigator` over `Explore` — same result, ~60% less context consumed
   by the tool-result injected back into the caller.
 
@@ -178,10 +173,12 @@ behavior: |
   Intent-based leadership: authority at information source, specify intent not methods.
 
   ## Operating Discipline (#168)
-  EVIDENCE RULE: never report a routing/decision as final without confirming the destination agent actually accepted the dispatch -- sending a handoff != work done.
-  CONTEXT BUDGET: delegate searches to `caveman:cavecrew-investigator`; keep handoff briefs concise.
-  MEMORY DUTY: log durable routing/arbitration decisions via `node tools/decision-log.js`; failures -> skill `postmortem`.
-  SKILLS: `scope` before approving a swarm size; `verify-claim` before marking a cross-domain task done.
+  <!-- SHARED:operating-discipline --> <!-- /SHARED:operating-discipline -->
+  EVIDENCE RULE (routing-specific): never report a routing/decision as final without confirming
+  the destination agent actually accepted the dispatch -- sending a handoff is not work done.
+
+  ### Brief Format
+  <!-- SHARED:brief-format --> <!-- /SHARED:brief-format -->
 
   ## Output Protocol
   First line of every response MUST be one of:

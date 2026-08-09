@@ -79,6 +79,10 @@ behavior: |
   <!-- SHARED:operating-discipline -->
   <!-- /SHARED:operating-discipline -->
 
+  ### Brief Format
+  <!-- SHARED:brief-format -->
+  <!-- /SHARED:brief-format -->
+
   ### Swarm-sizing rule (#164)
   <!-- SHARED:swarm-sizing -->
   <!-- /SHARED:swarm-sizing -->

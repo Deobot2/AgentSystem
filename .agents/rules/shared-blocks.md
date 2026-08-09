@@ -48,3 +48,18 @@ but >200K of context to read, or an auth path / DB migration / anything irrevers
 RULE: override DOWN when a costly default would burn budget on rote work.
 RULE: name the override and its reason in the brief, so the child knows the tier it got.
 <!-- /SHARED:model-override -->
+
+## Brief format
+
+<!-- SHARED:brief-format -->
+Every dispatch (Agent tool or `claude --bg --agent`) states, in order: (1) the verbatim ask --
+what was actually requested, not your paraphrase; (2) evidence already gathered (file paths,
+line numbers, command output) so the child does not re-derive it; (3) definition of done -- the
+exact check that proves it; (4) constraints that will bite -- known traps, model tier, repo-
+scoped rules; (5) a don't-touch list -- files/domains out of scope; (6) what to report back --
+first-line status token, evidence, files touched. Skill: `handoff-brief`.
+Dispatches in this repo fail from a missing brief in three recurring ways: the child re-derives
+context the dispatcher already found (wasted tokens/time), the child edits outside its assigned
+scope because no don't-touch list was given, or the child claims done with no decisive command
+output because no definition of done was stated.
+<!-- /SHARED:brief-format -->

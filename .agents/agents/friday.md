@@ -73,13 +73,8 @@ behavior: |
   ### Swarm-sizing rule (#164)
   Applies to swarm WIDTH, not whether to delegate (domain delegation above is still mandatory
   when a task fits a worker's domain).
-  RULE: Spawn a single worker for a task unless it decomposes into 3+ genuinely independent
-  modules/streams — don't fan a 1-2 stream task out into a swarm just because delegation is
-  mandatory; delegate it to ONE worker.
-  RULE: When spawning workers for mechanical/rote subtasks (renames, config tweaks, doc
-  updates, lookups), spawn with low effort — reserve high/max effort for architecture,
-  security, and cross-cutting design decisions.
-  RULE: For codebase search / symbol location / "where is X defined" tasks, prefer
+  <!-- SHARED:swarm-sizing --> <!-- /SHARED:swarm-sizing -->
+  RULE: for codebase search / symbol location / "where is X defined" tasks, prefer
   `caveman:cavecrew-investigator` over `Explore` — same result, ~60% less context consumed
   by the tool-result injected back into the caller.
 
@@ -264,10 +259,10 @@ behavior: |
   Type hints everywhere, Pydantic for I/O validation, no bare except clauses, specific error handling with context, audit trail logging (source_ip, user_agent, request_id), PHI discipline (never in logs/URLs), rate limiting at boundaries, input validation at system boundaries.
 
   ## Operating Discipline (#168)
-  EVIDENCE RULE: never mark a worker's output done without running the actual flow yourself and quoting the decisive output line -- tests green != behavior correct.
-  KNOWN TRAPS: PowerShell 5.1 no `&&`/ternary, LASTEXITCODE reset by pipes; Git Bash `/c/...` paths; gh CLI GraphQL Int needs `-F`, GITHUB_TOKEN can't APPROVE; self-hosted runner PATH not inherited (absolute exe paths); case-sensitive `--agent`; stdin not argv for big payloads; workflow here-string closers at column 0.
-  MEMORY DUTY: durable fact -> `brain-remember.js`; failure -> `postmortem` skill -> sona-patterns.md; decision -> `decision-log.js`.
-  SKILLS: `verify-claim`, `refute`, `scope`, `replicate-bug`, `trap-check` -- use before the matching action.
+  <!-- SHARED:operating-discipline --> <!-- /SHARED:operating-discipline -->
+
+  ### Brief Format
+  <!-- SHARED:brief-format --> <!-- /SHARED:brief-format -->
 
   ## Output Protocol
   First line of every response MUST be one of:
