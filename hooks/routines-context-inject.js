@@ -15,11 +15,30 @@ const REPO_ROOT = path.resolve(TOOLS, '..');
 const GENERATED_MD = path.join(REPO_ROOT, '.agents', 'rules', 'routines.generated.md');
 const OVERRIDES_PATH = path.join(os.homedir(), 'agent-memory', 'nexus', 'routine-overrides.json');
 
+/**
+ * Check if a session-scoped bypass override is still active.
+ * Duplicated in tools/routines.js — keep in sync with that copy.
+ * Both copies follow the same logic for consistency across read paths:
+ * - If override.session is falsy, it's permanent (always active)
+ * - If override.session is true:
+ *   - If override.sessionId is missing/falsy, treat as NOT active (fail-closed)
+ *   - If override.sessionId matches currentSessionId, it's active
+ *   - Otherwise, it's expired (not active in a new session)
+ */
+function isOverrideActive(override, currentSessionId) {
+  if (!override || !override.bypassed) return false;
+  // Non-session bypasses (session: false or absent) are always active (permanent)
+  if (!override.session) return true;
+  // Session-scoped bypass: only active if sessionId matches
+  // Missing/null sessionId is treated as NOT active (fail-closed)
+  return override.sessionId === currentSessionId && currentSessionId;
+}
+
 /** Ids with an active bypass in the machine-local overrides file. */
-function bypassedIds() {
+function bypassedIds(currentSessionId) {
   try {
     const overrides = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf8'));
-    return Object.keys(overrides).filter(id => overrides[id] && overrides[id].bypassed);
+    return Object.keys(overrides).filter(id => isOverrideActive(overrides[id], currentSessionId));
   } catch {
     return []; // No overrides file — nothing bypassed.
   }
@@ -50,7 +69,19 @@ module.exports = { applyBypasses };
 
 if (require.main === module) {
   let out = '';
-  const bypassed = bypassedIds();
+  let currentSessionId = null;
+
+  // Read session_id from stdin JSON payload (if provided by hook harness)
+  try {
+    const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+    if (payload && payload.session_id) {
+      currentSessionId = payload.session_id;
+    }
+  } catch {
+    // No stdin or not JSON — session_id will be null, fail-closed: no session bypasses honored
+  }
+
+  const bypassed = bypassedIds(currentSessionId);
 
   try {
     const md = applyBypasses(fs.readFileSync(GENERATED_MD, 'utf8'), bypassed);

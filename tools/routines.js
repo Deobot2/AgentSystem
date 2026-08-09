@@ -26,6 +26,25 @@ const OVERRIDES_PATH = join(homedir(), 'agent-memory', 'nexus', 'routine-overrid
 const SCHEDULED_YML = join(REPO_ROOT, '.github', 'workflows', 'scheduled-tasks.yml');
 
 // ---------------------------------------------------------------------------
+// Session bypass expiry check — determines if an override is still active.
+// Duplicated in hooks/routines-context-inject.js — keep in sync with that copy.
+// Both copies follow the same logic for consistency across read paths:
+// - If override.session is falsy, it's permanent (always active)
+// - If override.session is true:
+//   - If override.sessionId is missing/falsy, treat as NOT active (fail-closed)
+//   - If override.sessionId matches currentSessionId, it's active
+//   - Otherwise, it's expired (not active in a new session)
+// ---------------------------------------------------------------------------
+function isOverrideActive(override, currentSessionId) {
+  if (!override || !override.bypassed) return false;
+  // Non-session bypasses (session: false or absent) are always active (permanent)
+  if (!override.session) return true;
+  // Session-scoped bypass: only active if sessionId matches
+  // Missing/null sessionId is treated as NOT active (fail-closed)
+  return override.sessionId === currentSessionId && currentSessionId;
+}
+
+// ---------------------------------------------------------------------------
 // Minimal YAML parser — handles the constrained routines.yml format only.
 // Supports: list of objects with string/boolean values. No nested objects.
 // ---------------------------------------------------------------------------
@@ -140,7 +159,12 @@ function cmdList() {
   console.log('Routines:\n');
   for (const r of routines) {
     const bypass = overrides[r.id];
-    const bypassed = bypass ? ` [BYPASSED${bypass.session ? ' session' : ''}]` : '';
+    // `list` runs as a CLI command inside the same session that may have just set a session
+    // bypass (same env as `bypass --session`), so use CLAUDE_CODE_SESSION_ID for parity —
+    // otherwise a bypass just set this session would immediately display as "(expired)".
+    // A bypass from any OTHER session (different id, or no id recorded) still fails closed.
+    const isActive = isOverrideActive(bypass, process.env.CLAUDE_CODE_SESSION_ID ?? null);
+    const bypassed = bypass ? ` [BYPASSED${bypass.session ? ' session' : ''}${!isActive && bypass.session ? ' (expired)' : ''}]` : '';
     const enabled = r.enabled ? 'enabled' : 'disabled';
     console.log(`  ${r.id}`);
     console.log(`    mechanism: ${r.mechanism}  enforce: ${r.enforce}  ${enabled}${bypassed}`);
@@ -334,7 +358,14 @@ function cmdBypass(id, sessionFlag) {
     console.error(`[routines] unknown routine: ${id}`); process.exit(1);
   }
   const overrides = readOverrides();
-  overrides[id] = { bypassed: true, session: !!sessionFlag, at: new Date().toISOString() };
+  const override = { bypassed: true, session: !!sessionFlag, at: new Date().toISOString() };
+  // When marking as session-scoped, stamp the session ID from environment.
+  // If --session is passed but CLAUDE_CODE_SESSION_ID is not in the environment,
+  // stamp null so the bypass will not be honored on read (fail-closed).
+  if (sessionFlag) {
+    override.sessionId = process.env.CLAUDE_CODE_SESSION_ID ?? null;
+  }
+  overrides[id] = override;
   writeOverrides(overrides);
   console.log(`[routines] bypassed: ${id}${sessionFlag ? ' (session)' : ''}`);
 }
@@ -358,7 +389,11 @@ export function dispatchRoutines({ event, context } = {}) {
 
   return routines.filter(r => {
     if (!r.enabled) return false;
-    if (overrides[r.id]) return false;
+    // dispatchRoutines runs in-process inside the hook's own child process, which inherits the
+    // same CLAUDE_CODE_SESSION_ID as any `bypass --session` CLI call made in this session — use
+    // it so a bypass set THIS session is honored here too. A bypass from a past/other session (or
+    // with no recorded session id) still fails closed via isOverrideActive.
+    if (isOverrideActive(overrides[r.id], process.env.CLAUDE_CODE_SESSION_ID ?? null)) return false;
     if (r.mechanism !== 'hook') return false;
     // Match trigger to event context
     if (event === 'PostToolUse' && r.trigger === 'pr_create') return true;
