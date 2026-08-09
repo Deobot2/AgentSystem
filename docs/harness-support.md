@@ -14,7 +14,7 @@ does not account for, and if a `gap` cell has no linked issue.
 
 **Antigravity has no hook layer.** `tools/deploy-hooks.js` copies hooks to `~/.claude/hooks` and
 registers them under `hooks` in `~/.claude/settings.json`. Nothing equivalent exists for `agy`, so
-all 12 registered hooks are Claude-only.
+every registered hook in `HOOK_REGISTRY` is Claude-only.
 
 That single fact explains most of the `gap` cells below, which is why they share one tracking issue
 rather than one each. Everything AgentSystem does *automatically* — inject memory, enforce routines,

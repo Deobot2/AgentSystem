@@ -58,21 +58,32 @@ auto-close the tracking issue on indirect detection alone.
 ## Audit timing
 
 **Sam (`sam-audit.yml`)** — the pre-merge security gate, and a required status check on
-`main`. Fires once per PR at merge-prep time (#164):
+`main`. Triggers, as of #228:
 
 - on `opened`, for non-draft PRs only
 - on `ready_for_review` (draft → ready)
-- when the `ready-to-merge` label is added to an already-open PR
+- on `synchronize` (every push)
 
-To re-trigger after addressing feedback: mark the PR ready for review if it is a draft,
-or add the `ready-to-merge` label. It no longer runs on every `synchronize` push.
+There is no label-based trigger. `labeled`/`ready-to-merge` was deliberately removed in #228:
+adding *any* label made the job skip, and GitHub counts a skipped required check as satisfied —
+so `open PR → push → add label → merge` shipped code to main with no audit at all. Don't
+reintroduce a label trigger to "force a re-audit"; that's the exact bypass this closed.
+
+To re-trigger after addressing feedback: push a commit (covered by `synchronize`), or re-run
+the job from the Actions UI.
 
 **Friday (`friday-audit.yml`)** — engineering review, informational only. Fires once, on
 `opened`.
 
-Both skip docs-only changes (`docs/**`, `**/*.md` via `paths-ignore`) and PRs labelled
-`spec`. `pr-auto-review` (the cavecrew reviewer, formerly in `scheduled-tasks.yml`) is
-retired; `friday-audit.yml` is the single engineering reviewer.
+`friday-audit.yml` skips docs-only changes via a workflow-level `paths-ignore`
+(`docs/**`, `**/*.md`) and PRs labelled `spec`. `sam-audit.yml` deliberately does **not** use
+`paths-ignore` (#147): it is a required status check, so a workflow-level path filter would mean
+docs-only PRs never produce the check at all, making them permanently unmergeable once branch
+protection requires it. Instead it early-exits *inside* the job (still labelled `spec` PRs too),
+so the required check still reports a passing result without spending an audit run. Do not add
+`paths-ignore` to `sam-audit.yml` — it would silently break docs-only PRs. `pr-auto-review` (the
+cavecrew reviewer, formerly in `scheduled-tasks.yml`) is retired; `friday-audit.yml` is the single
+engineering reviewer.
 
 ## Required status checks on `main`
 
@@ -80,3 +91,16 @@ retired; `friday-audit.yml` is the single engineering reviewer.
 so with no usable runner every PR is unmergeable without an admin override — and an admin
 override merges without the security gate. Fix the runner rather than making a habit of
 `--admin`.
+
+## Linked-issue check (#275)
+
+`pr-linked-issue-check.yml` runs on `ubuntu-latest` for every PR opened or synchronized against
+`main`. It requires each PR to reference an issue, checked in order:
+
+- the branch name matches `issue-<N>-...`, or
+- the PR body contains a close/fix/resolve keyword plus `#N` (`closes #42`, `fixes #42`, etc.)
+
+PRs labelled `spec` are exempt (design/discussion, not merged code). An unlinked PR gets a
+one-time bot comment explaining how to link it, and the check fails (`exit 1`) until it is
+linked or labelled `spec`. It is not currently in the `Required status checks` list above —
+add it there if it should block merges rather than just flag them.

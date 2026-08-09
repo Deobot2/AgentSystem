@@ -167,15 +167,19 @@ Be Ultron: review this API design
 
 ## Memory Structure
 
-**Each agent maintains memory in `.agents/memory/{agent}.md` with sections:**
+`.agents/memory/{agent}.md` (with a `TEMPLATE.md`) was the original per-agent memory format.
+It was deprecated in #117 and the directory no longer exists in this repo — the flat-file
+sections it described (Session Log, Key Decisions, Operational Patterns, Cadence, Learnings)
+are not written or read by any current tool. If you land here from an old link or a cached
+context, that structure is history, not practice.
 
-- **Session Log:** `[DATE HH:MM]: [outcome summary]` — one line per session
-- **Key Decisions:** What was decided, when, why, impact
-- **Operational Patterns:** How does this agent think? What signals trigger escalation?
-- **Cadence:** When does review happen? What to check each cycle?
-- **Learnings:** What surprised this agent? What changed their future decisions?
-
-**Template:** See `.agents/memory/TEMPLATE.md`
+**Current mechanism:** each agent's memory lives as per-agent nodes under
+`~/agent-memory/nexus/agent-brain/<agent>/nodes/`, outside this repo (shared across hosts —
+see CLAUDE.md → Memory). Agents write to it via `node tools/brain-remember.js --fact="..."`
+(optionally `--section=` or `--tier=repo|agent --target=...`), which dedups and re-splits
+facts rather than appending raw log lines. Reading back goes through the graph, not a
+flat file: `node tools/graph/graph-query.js agentsystem <keywords>`, or the MCP tools
+`memory_read_agent`, `memory_context`, and `memory_reflect` in `tools/mcp-server.js`.
 
 ---
 

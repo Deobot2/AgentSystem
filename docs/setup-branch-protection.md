@@ -30,7 +30,7 @@ gh repo edit --enable-auto-merge
 # 2. Protect dev branch: require Sam audit + tests before merge
 gh api repos/:owner/:repo/branches/dev/protection `
   --method PUT `
-  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js test suite"]}' `
+  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js tests"]}' `
   --field enforce_admins=false `
   --field required_pull_request_reviews='{"required_approving_review_count":0,"dismiss_stale_reviews":true}' `
   --field restrictions=null
@@ -38,7 +38,7 @@ gh api repos/:owner/:repo/branches/dev/protection `
 # 3. Protect main branch: same checks, stricter
 gh api repos/:owner/:repo/branches/main/protection `
   --method PUT `
-  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js test suite"]}' `
+  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js tests"]}' `
   --field enforce_admins=false `
   --field required_pull_request_reviews='{"required_approving_review_count":1,"dismiss_stale_reviews":true}' `
   --field restrictions=null
