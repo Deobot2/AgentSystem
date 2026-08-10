@@ -133,7 +133,11 @@ No GitHub repo webhook has been created as part of this issue.
 
 - **GitHub webhook integration (`/github`):** Not configured. Requires public URL + secret (not available for residential desktop without Tailscale/Cloudflare). `/github` endpoint code is mature; activation requires external webhook setup (see section 2).
 - **Windows service autostart:** PowerShell Task Scheduler registration fails from agent sessions (HRESULT 0x80070005). Workaround: run `pwsh -File tools/setup-webhook-autostart.ps1` from interactive desktop session. Currently verified in foreground only.
-- **Concurrency guards:** Legacy `spawnAgent()` function (used by `/github` and legacy `/run`) enforces MAX_CONCURRENT_BG_SESSIONS=5; SessionRegistry enforces max 1 per harness. These can conflict when system has many active sessions from other sources (e.g., multiple interactive Claude Code terminals). Spawn requests return 429 with details when caps are hit.
+- **Concurrency guards:** Legacy `spawnAgent()` function (used by `/github` and legacy `/run`) enforced MAX_CONCURRENT_BG_SESSIONS=5 at the time of this writing; SessionRegistry enforced max 1 per harness. These can conflict when system has many active sessions from other sources (e.g., multiple interactive Claude Code terminals). Spawn requests return 429 with details when caps are hit.
+  **Correction (2026-08-10):** both numbers have since changed. `webhook-server.js` now defaults
+  `MAX_CONCURRENT_BG_SESSIONS` to **8** (`MC_MAX_BG_SESSIONS` env override) and the per-harness cap
+  (`MAX_PER_HARNESS`) to **4** (`MC_MAX_PER_HARNESS` env override, "was a hard 1 — #95"). Check
+  `webhook-server.js` directly for the live defaults rather than trusting either number here.
 
 ### Test Commands Used
 

@@ -9,18 +9,22 @@
 
 | Decision Type | Escalation Path | Owner | SLA | Channel |
 |---|---|---|---|---|
-| Architecture decision | Friday → Jarvis if stalled | Friday | 4h | GitHub Discussion |
+| Architecture decision | Friday → Jarvis if stalled | Friday | 4h | GitHub Issue |
 | Security block (pre-merge) | Sam → Friday → Jarvis if >8h | Sam | 8h | GitHub PR comment + @sam |
 | Backend conflict | Ultron → Friday | Friday | 4h | GitHub Issue @friday |
 | Frontend conflict | Astra → Friday | Friday | 4h | GitHub Issue @friday |
 | DB migration failure | Pym → Friday | Friday | 4h | GitHub Issue @friday |
 | DevOps/CI-CD failure | Leo → Friday | Friday | 2h | GitHub Issue @friday |
 | Design conflict | Wanda → Friday | Friday | 4h | GitHub Issue @friday |
-| Business strategy conflict | Nat → Jarvis | Jarvis | 24h | GitHub Discussion @jarvis |
-| Agent timeout / stall (>30min) | Any → Jarvis | Jarvis | 2h | GitHub Discussion @jarvis |
+| Business strategy conflict | Nat → Jarvis | Jarvis | 24h | GitHub Issue @jarvis |
+| Agent timeout / stall (>30min) | Any → Jarvis | Jarvis | 2h | GitHub Issue @jarvis |
 | Memory sync failure | Leo → Friday | Friday | 1h | GitHub Issue @friday |
-| Security incident | Sam → Jarvis | Jarvis | 30 min | GitHub Discussion @jarvis + @sam |
+| Security incident | Sam → Jarvis | Jarvis | 30 min | GitHub Issue @jarvis + @sam |
 | CEO-level decision | Jarvis → Nathan (human) | Nathan | 24h | Email / calendar |
+
+Note: GitHub Discussions are disabled repo-wide (`has_discussions: false`) — every channel above
+is a GitHub Issue (or PR comment), not a Discussion, per `docs/GITHUB-ISSUES.md` and
+`docs/AGENTS.md`, which already use Issues as the task/escalation model.
 
 ---
 
@@ -45,8 +49,9 @@
 
 For blockers lasting **>30 minutes** that prevent work from proceeding:
 
-1. Post in GitHub Discussions under category **"Agent Incidents"** with title format:  
-   `[URGENT] [Agent] blocked on [issue] — [elapsed time]`
+1. Open a GitHub Issue (or comment on the relevant existing one) with title format:
+   `[URGENT] [Agent] blocked on [issue] — [elapsed time]`. Label it `human-needed` if only a
+   person can unblock it — see `node tools/human-needed.js raise` in the root `CLAUDE.md`.
 2. @-mention Jarvis + the blocking agent
 3. If no response in 2h, Nathan (human) is the final escalation — email or calendar invite
 
@@ -71,7 +76,7 @@ For blockers lasting **>30 minutes** that prevent work from proceeding:
 
 ## Escalation Post Template
 
-Use this format when posting an escalation to GitHub Discussions or Issues:
+Use this format when posting an escalation to a GitHub Issue or PR:
 
 ```
 **Escalation — [Decision Type]**

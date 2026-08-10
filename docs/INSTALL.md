@@ -1,7 +1,8 @@
 # AgentSystem -- Installation Guide
 
 Complete step-by-step setup for every supported CLI and platform.
-Claude Code and Gemini share the same agents and memory -- install once, use everywhere.
+Claude Code and Antigravity (`agy`) share the same agents and memory -- install once, use
+everywhere. There is no `gemini` CLI or GitHub Copilot integration in this system.
 
 ---
 
@@ -57,7 +58,8 @@ chmod +x install.sh
 What both scripts do:
 - Check prerequisites (node, git, gh, CLIs)
 - Initialize personal brain at `~/agent-memory/nexus/personal-brain/user-brain.md`
-- Sync all 11 agents to `~/.claude/agents/` and `~/.gemini/agents/`
+- Sync all 12 agents to `~/.claude/agents/` and `~/.gemini/agentsystem-plugin/agents/`
+  (the Antigravity plugin directory, via `tools/sync-agents.js`)
 - Create GitHub labels (`agent:friday`, `priority:high`, etc.)
 
 `install.sh` additionally (Linux/macOS only — `install.ps1` does not do these yet):
@@ -82,33 +84,30 @@ curl -fsSL https://claude.ai/install.sh | bash    # installs to ~/.local/bin/cla
 
 **Use agents:**
 ```bash
-claude @friday     # engineering (CTO)
-claude @jarvis     # strategy / CEO
-claude @nat        # business / CBO
-claude @sam        # security audit
-claude @ultron     # backend API
-claude @pym        # database
-claude @leo        # DevOps / CI-CD
-claude @astra      # frontend
-claude @wanda      # design
-claude @threepio   # docs / comms
-claude @r2d2       # fallback / exploratory
+claude @friday                  # engineering (CTO)
+claude @jarvis                  # strategy / CEO
+claude @nat                     # business / CBO
+claude @sam                     # security audit
+claude @ultron                  # backend API
+claude @pym                     # database
+claude @leo                     # DevOps / CI-CD
+claude @astra                   # frontend
+claude @wanda                   # design
+claude @threepio                # docs / comms
+claude @r2d2                    # general technical worker
+claude @clarification-needed    # asks clarifying questions on vague requests
 ```
+(`claude --agent <name>` is equivalent to `claude @<name>`.)
 
-**Install MCP server** (exposes agent tools natively -- recommended). `./install.sh`
-already does this; run it by hand only on Windows or if that step warned:
-```bash
-# Replace /path/to with your actual path
-claude mcp add agentsystem -- node /path/to/AgentSystem/tools/mcp-server.js
-```
-
-After MCP install, these tools are available in every Claude Code session:
-- `agent_send_message` -- message any agent inbox
-- `agent_list_inbox` -- read inbox
-- `agent_archive_inbox` -- archive inbox
-- `graph_query` -- query Bayesian graph memory
-- `memory_read_brain` -- read your personal brain
-- `memory_read_agent` -- read any agent's memory
+**MCP server (currently non-functional -- do not install for production use):**
+`./install.sh` attempts `claude mcp add agentsystem -- node <repo>/tools/mcp-server.js`
+automatically. `tools/mcp-server.js` requires the `@modelcontextprotocol/sdk` npm package, which is
+not installed (the `tools/**` path in this repo is npm-deps-free by rule) -- running it fails
+immediately with `ERR_MODULE_NOT_FOUND`. Registering it with `claude mcp add` does not fix that; the
+tools it would expose (`agent_send_message`, `agent_list_inbox`, `agent_archive_inbox`,
+`graph_query`, `memory_read_brain`, `memory_read_agent`, `memory_remember`, `memory_context`,
+`memory_reflect`) are unavailable until this is fixed. Use the equivalent CLI tools directly instead:
+`node tools/agent-message.js`, `node tools/graph/graph-query.js`.
 
 **Verify:**
 ```bash
@@ -118,37 +117,33 @@ claude @friday
 
 ---
 
-### Gemini CLI
+### Antigravity (`agy`)
 
-**Install:**
-```bash
-# Follow: https://github.com/google-gemini/gemini-cli
-npm install -g @google/generative-ai-cli
-```
+Antigravity is the second supported harness -- there is no `gemini` CLI in this system. See
+`docs/harness-support.md` for the full list of what does and does not work under it (notably: no
+hooks, so no session auto-rename and no continuous brain sync at session start/end).
 
-**Authenticate:**
-```bash
-gemini auth login
-```
+**Install:** follow Antigravity's own setup instructions to get the `agy` CLI on PATH.
 
-Agents are synced to `~/.gemini/agents/` automatically by `install.sh` / `install.ps1`.
+Agents are synced automatically by `install.sh` / `install.ps1` (via `tools/sync-agents.js`) to a
+plugin manifest at `~/.gemini/agentsystem-plugin/agents/`, then registered with
+`agy plugin install ~/.gemini/agentsystem-plugin` if `agy` is found on PATH.
 
 **Use agents:**
 ```bash
-gemini @friday     # engineering
-gemini @jarvis     # strategy
-gemini @nat        # business
+agy @friday     # engineering
+agy @jarvis     # strategy
+agy @nat        # business
 ```
 
 - Same agent roster and routing rules as Claude Code
 - Memory is shared via `~/agent-memory/nexus/`
-- Gemini executes agents **sequentially** (no parallel swarm spawning)
-- Model assigned: gemini-3-flash-preview (standard), gemini-3.1-pro-preview (Jarvis/Sam)
+- Model ids come from the `MODELS.gemini` map in `tools/sync-agents.js` (`gemini-*` ids -- Antigravity
+  is a Gemini-family runtime)
 
 **Verify:**
 ```bash
-gemini @friday
-# Should load Friday agent with model: gemini-3-flash-preview
+ls ~/.gemini/agentsystem-plugin/agents/*.md | wc -l   # expect 12
 ```
 
 ---
@@ -240,10 +235,9 @@ node tools/sync-agents.js
 ## Verification checklist
 
 ```bash
-# Agents present (expect 11 each)
+# Agents present (expect 12 each)
 ls ~/.claude/agents/*.md | wc -l
-ls ~/.copilot/agents/*.md | wc -l
-ls ~/.gemini/agents/*.md | wc -l
+ls ~/.gemini/agentsystem-plugin/agents/*.md | wc -l
 
 # Memory exists
 ls ~/agent-memory/nexus/
@@ -251,15 +245,15 @@ ls ~/agent-memory/nexus/
 # Personal brain
 cat ~/agent-memory/nexus/personal-brain/user-brain.md
 
-# Config synced
-ls ~/.claude/agents/config/
-
-# MCP server (should start silently -- Ctrl+C to exit)
-node tools/mcp-server.js
+# Sync drift check (exit 1 on drift, writes nothing)
+node tools/sync-agents.js --check
 
 # Run tests
 npm test
 ```
+
+There is no GitHub Copilot integration in this system, and `node tools/mcp-server.js` is expected
+to fail (`ERR_MODULE_NOT_FOUND`) -- see the MCP server note in Step 3.
 
 ---
 
@@ -269,8 +263,9 @@ npm test
 Re-run sync: `node tools/sync-agents.js`
 
 **MCP tools not available in Claude Code**
-Check: `claude mcp list` -- agentsystem should appear.
-Re-add: `claude mcp add agentsystem -- node /path/to/AgentSystem/tools/mcp-server.js`
+Expected -- `tools/mcp-server.js` is currently non-functional (missing
+`@modelcontextprotocol/sdk`; see the note in Step 3). Use `node tools/agent-message.js` and
+`node tools/graph/graph-query.js` directly instead.
 
 **CI workflows queue but never run**
 Runner not set up. Follow Step 5 above.

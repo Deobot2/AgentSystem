@@ -1,8 +1,13 @@
 # Mission Control — Always-On Remote Session Dispatch
 
-**Status:** Architecture + Specification (pre-implementation)  
-**Issues:** #82–#88  
-**Last Updated:** 2026-06-30  
+**Status:** Implemented and running (`tools/mission-control/webhook-server.js`). The endpoints
+listed in "HTTP API Contract" below exist in code, plus a number of undocumented endpoints
+(`/stop`, `/reply`, `/pr`, `/diff`, `/branches`, `/scratchpads`, `/scratchpad`, `/memory/*`,
+`/pipelines`, `/runs`, `/briefing`, `/panel`) that this doc has not caught up to yet. Some sections
+below (marked where relevant) describe original design intent that no longer matches the shipped
+code — verify against `tools/mission-control/webhook-server.js` before relying on specifics.
+**Issues:** #82–#88
+**Last Updated:** 2026-08-10
 **Owner:** Leo (infra), Friday (oversight)
 
 ---
@@ -115,7 +120,10 @@ Mission Control and Claude.ai remote control serve different needs and work toge
 
 #### Webhook Service (`claude-webhook.service`)
 
-**Status:** Currently ACTIVE, listening on `0.0.0.0:8765`.
+**Status:** Currently ACTIVE, listening on `127.0.0.1:8765` by default (`webhook-server.js`:
+`HOST = process.env.HOST || '127.0.0.1'`, `PORT = process.env.PORT || 8765`). Binding to a LAN or
+public interface is opt-in via the `HOST` env var / the installer's `--lan` / `--bind` flags — see
+the "Binding interface" note under Security Model below.
 
 Node.js HTTP server (single process, no load balancing required — mini-PC context). Auth via static API key. Endpoints documented in "HTTP API Contract" below.
 
@@ -428,7 +436,7 @@ See `.github/workflows/agent-dispatch.yml` for upstream integration. Signature v
 
 | Harness | Spawn Command | Persistence | Resume | Log Source | Registry Hook |
 |---------|---|---|---|---|---|
-| **Claude Code** | `claude -p "<prompt>" --agent <agent> --bg` | `claude-daemon.service` (systemd) | N/A (new session each time) | stderr + systemd journal | Webhook polls `/proc` and journal |
+| **Claude Code** | `claude -p "<prompt>" --agent <agent> --bg` | Spawned/tracked by `claude-webhook.service` itself — there is no separate `claude-daemon.service` | N/A (new session each time) | stderr + systemd journal | Webhook polls `/proc` and journal |
 | **Antigravity CLI** | `agy -p "<prompt>" --add-dir <repo> --model <model> [--continue <id>]` | TBD (see open questions) | `--continue <id>` (resumes from history) | stdout/stderr → webhook sink | Webhook manages history.jsonl lookup |
 
 ---
@@ -441,7 +449,11 @@ See `.github/workflows/agent-dispatch.yml` for upstream integration. Signature v
 
 **Best practice:** Rotate key annually; store in password manager or 1Password vault.
 
-**Binding interface:** Currently `0.0.0.0:8765` (accepts external connections). For production:
+**Binding interface:** Defaults to loopback, `127.0.0.1:8765` (`webhook-server.js` HOST env var,
+default `127.0.0.1`) — it does not accept external connections out of the box. The shipped systemd
+unit template (`tools/mission-control/claude-webhook.service`) states this explicitly: exposing the
+agent-spawn API on a LAN or public interface is opt-in only, via `--lan`/`--bind <addr>` on the
+installer. For any deployment that does opt in:
 
 1. **Tailscale VPN:** Bind to Tailscale interface only (e.g., `--tailscale-only` flag or `listen 100.x.x.x:8765`).
 2. **TLS enforcement:** Webhook must use TLS (self-signed cert for Tailscale is acceptable; full cert for internet-facing).
@@ -477,7 +489,8 @@ See Issue #79 for deeper risk analysis (self-hosted runner context).
 
 ### Systemd Service
 
-**Service:** `claude-daemon.service` and `claude-webhook.service`
+**Service:** `claude-webhook.service` only. There is no separate `claude-daemon.service` in this
+repo — the webhook server itself spawns and tracks Claude Code / Antigravity sessions.
 
 **Config:**
 ```ini
@@ -504,9 +517,9 @@ WantedBy=multi-user.target
 ### Session Recovery
 
 **Claude Code:**
-- Sessions persisted by `claude-daemon.service`.
+- Sessions are spawned and tracked directly by `claude-webhook.service` (no separate daemon).
 - On restart, `claude agents` lists all running/recent sessions.
-- Webhook pulls session state from daemon on startup.
+- Webhook rebuilds registry state from the session registry file on startup.
 
 **Antigravity CLI (TBD):**
 - Currently unclear how `agy` survives PC reboot.

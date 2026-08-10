@@ -1,6 +1,25 @@
 # GitHub Issues for Agent System Enhancement
 
-These issues implement ADR-001 recommendations. Create them in `Zene8/AgentSystem` repo.
+**Status: HISTORICAL / ARCHIVED.** This was the proposed issue backlog from the ADR-001 review.
+Its *intent* was implemented, but not via the concrete files this doc describes — do not create
+these issues or follow their "Work" steps literally today. What actually landed:
+
+- AD-01/02/03/05/06/08/10 (default agent, startup procedure, routing rules, domain ownership map,
+  bypass mechanism, coordination rules, consolidated docs) → all live today as sections in
+  `docs/AGENTS.md`: "Routing Rules", "Domain Ownership Map", "Coordination Rules", "Startup
+  Procedure", "Bypassing Jarvis", "Memory Structure", "Escalation Paths".
+- AD-04's memory template intent → superseded by the graph-brain layout at
+  `~/agent-memory/nexus/agent-brain/<agent>/nodes/` (see root `CLAUDE.md` → "Memory"). There is no
+  `.agents/memory/` directory in this repo (deprecated per #117) and no `MEMORY.md` template file.
+- AD-07 (Threepio & r2d2 definitions) → done: both are fully specified in `.agents/agents/threepio.md`
+  and `.agents/agents/r2d2.md`.
+- AD-09's sync-script update → done, but the tool named in this doc never existed under that name.
+  The real, current sync tool is `node tools/sync-agents.js` (with `--check` for drift detection),
+  not `sync_agents_from_repo.ps1`.
+
+The per-issue bodies below are kept for historical reference only; several reference paths that
+never existed in this repo (`.agents/memory/<agent>.md`, `agents-memory/jarvis.md`,
+`sync_agents_from_repo.ps1`) — see the corrections inline.
 
 ---
 
@@ -29,6 +48,8 @@ Current system has Jarvis defined as CEO orchestrator but no explicit default en
 
 ## AD-02: Design Jarvis startup procedure
 **Label:** `system/agent-architecture`, `enhancement`
+**Correction:** `agents-memory/jarvis.md` (step 1 below) never existed. The real memory location
+is `~/agent-memory/nexus/agent-brain/jarvis/nodes/`.
 **Body:**
 ```
 **From:** ADR-001 Agent System Architecture Review
@@ -100,6 +121,9 @@ Routing logic: match most specific pattern first. If no match → Jarvis determi
 
 ## AD-04: Create memory structure template
 **Label:** `system/agent-architecture`, `documentation`
+**Correction:** `.agents/memory/` never existed as a directory in this repo and no `MEMORY.md`
+template was ever added there. Memory structure landed instead as the graph-brain layout under
+`~/agent-memory/nexus/agent-brain/<agent>/nodes/`, documented in root `CLAUDE.md` → "Memory".
 **Body:**
 ```
 **From:** ADR-001 Agent System Architecture Review
@@ -279,6 +303,10 @@ behavior: |
 
 ## AD-08: Create AGENTS.md coordination rules
 **Label:** `system/agent-architecture`, `documentation`
+**Correction:** `.agents/memory/{agent}.md` (rule 4) never existed; memory is
+`~/agent-memory/nexus/agent-brain/<agent>/nodes/`. `sync_agents_from_repo.ps1` (rule 8) never
+existed; the real sync tool is `node tools/sync-agents.js`. "GitHub Discussion" (rule 6) does not
+apply — Discussions are disabled repo-wide; escalation is via GitHub Issue.
 **Body:**
 ```
 **From:** ADR-001 Agent System Architecture Review
@@ -314,6 +342,11 @@ Create AGENTS.md section:
 
 ## AD-09: Update sync script for memory structure
 **Label:** `system/agent-architecture`, `tooling`
+**Correction:** `sync_agents_from_repo.ps1` never existed. The real, current sync tool is
+`node tools/sync-agents.js`, which syncs `.agents/agents/*.md` to `~/.claude/agents/*.md` (Claude
+Code) and to a plugin manifest at `~/.gemini/agentsystem-plugin/agents/*.md` (Antigravity) — not
+`~/.gemini/agents/*.yaml` as step 1 below describes. `node tools/sync-agents.js --check` is the
+drift-detection step.
 **Body:**
 ```
 **From:** ADR-001 Agent System Architecture Review

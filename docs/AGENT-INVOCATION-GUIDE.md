@@ -1,352 +1,160 @@
 # Agent Invocation Guide
 
-**Last Updated:** 2026-05-21  
-**Owner:** Threepio (Docs)  
+**Last Updated:** 2026-08-10
+**Owner:** Threepio (Docs)
 **Linked from:** HANDOFF.md, README.md
 
-Command syntax, latency expectations, invocation patterns, and troubleshooting for each agent across Claude Code and Gemini CLIs.
+Command syntax and troubleshooting for each agent across the two supported harnesses: Claude Code
+and Antigravity (`agy`). There is no `gemini` CLI in this system — see `docs/harness-support.md`
+for the authoritative harness list.
 
 ---
 
 ## Related: Mission Control
 
-For **remote spawning** of new sessions (vs. attaching to running sessions), see [mission-control.md](mission-control.md). Mission Control enables dispatching Claude Code or Antigravity CLI sessions from a phone/browser without SSH, with repo picker, fleet management, and cost tracking. It complements this guide (which focuses on direct invocation via CLI) and remote control (which drives already-running sessions).
+For **remote spawning** of new sessions (vs. attaching to running sessions), see
+[mission-control.md](mission-control.md). Mission Control dispatches Claude Code or Antigravity
+sessions from a phone/browser without SSH. It complements this guide (direct CLI invocation) and
+remote control (driving already-running sessions).
 
 ---
 
 ## Quick Reference
 
-| Agent | Model | Role | Claude Code | Gemini |
+Model IDs below are the live `MODELS.claude` map in `tools/sync-agents.js`.
+
+| Agent | Model | Role | Claude Code | Antigravity |
 |---|---|---|---|---|
-| Jarvis | claude-opus-4-8 | CEO / Default | `claude --agent jarvis` | `gemini --agent jarvis` |
-| Friday | claude-sonnet-4-6 | CTO | `claude --agent friday` | `gemini --agent friday` |
-| Sam | claude-sonnet-4-6 | CSO / Security | `claude --agent sam` | `gemini --agent sam` |
-| Nat | claude-sonnet-4-6 | CBO | `claude --agent nat` | `gemini --agent nat` |
-| Ultron | claude-haiku-4-5 | Backend | `claude --agent ultron` | `gemini --agent ultron` |
-| Astra | claude-haiku-4-5 | Frontend | `claude --agent astra` | `gemini --agent astra` |
-| Pym | claude-haiku-4-5 | Database | `claude --agent pym` | `gemini --agent pym` |
-| Leo | claude-haiku-4-5 | DevOps | `claude --agent leo` | `gemini --agent leo` |
-| Wanda | claude-sonnet-4-6 | Design | `claude --agent wanda` | `gemini --agent wanda` |
-| Threepio | claude-sonnet-4-6 | Docs | `claude --agent threepio` | `gemini --agent threepio` |
-| r2d2 | claude-haiku-4-5 | Fallback | `claude --agent r2d2` | `gemini --agent r2d2` |
+| Jarvis | claude-opus-5 | CEO / Default | `claude --agent jarvis` | `agy --agent jarvis` |
+| Friday | claude-sonnet-5 | CTO | `claude --agent friday` | `agy --agent friday` |
+| Sam | claude-opus-5 | CSO / Security | `claude --agent sam` | `agy --agent sam` |
+| Nat | claude-sonnet-5 | CBO | `claude --agent nat` | `agy --agent nat` |
+| clarification-needed | claude-sonnet-5 | Clarifies vague requests | `claude --agent clarification-needed` | `agy --agent clarification-needed` |
+| Ultron | claude-haiku-4-5-20251001 | Backend | `claude --agent ultron` | `agy --agent ultron` |
+| Astra | claude-haiku-4-5-20251001 | Frontend | `claude --agent astra` | `agy --agent astra` |
+| Pym | claude-haiku-4-5-20251001 | Database | `claude --agent pym` | `agy --agent pym` |
+| Leo | claude-haiku-4-5-20251001 | DevOps | `claude --agent leo` | `agy --agent leo` |
+| Wanda | claude-haiku-4-5-20251001 | Design | `claude --agent wanda` | `agy --agent wanda` |
+| Threepio | claude-haiku-4-5-20251001 | Docs | `claude --agent threepio` | `agy --agent threepio` |
+| r2d2 | claude-haiku-4-5-20251001 | General technical worker | `claude --agent r2d2` | `agy --agent r2d2` |
+
+Sam is opus-tier because it is the hard security gate on `main` merges, not sonnet — see the
+model-choice comment above `MODELS` in `tools/sync-agents.js`.
+
+Antigravity uses `gemini-*` model ids (it is a Gemini-family runtime driven through the `agy` CLI,
+not a `gemini` CLI) — see `MODELS.gemini` in the same file for the current mapping.
 
 ---
 
-## Latency Expectations by Model
+## Real `claude` CLI flags relevant to agent invocation
 
-| Model | Typical p50 Response | Notes |
-|---|---|---|
-| claude-opus-4-8 | 8–15s first token | Highest quality; used for Jarvis (CEO) |
-| claude-sonnet-4-6 | 3–6s first token | Balance of quality and speed |
-| claude-haiku-4-5 | 1–3s first token | Fastest; used for domain-specialist agents |
+There is no per-agent, per-task flag surface (no `--api-review`, `--pr-description`,
+`--arch-review=`, etc.). Verified against `claude --help` on this host:
 
----
+| Flag | Purpose |
+|---|---|
+| `--agent <agent>` | Select the agent for this session, overriding the `agent` setting |
+| `--bg`, `--background` | Start the session as a background agent and return immediately (manage with `claude agents`) |
+| `-c`, `--continue` | Continue the most recent conversation in the current directory |
+| `-p`, `--print` | Non-interactive output (print the response and exit) |
+| `--bare` | Minimal mode: skips hooks, LSP, plugin sync, CLAUDE.md auto-discovery, etc. |
+| `--add-dir <dirs...>` | Grant tool access to additional directories |
+| `--dangerously-skip-permissions` | Bypass all permission checks (use with care) |
+| `--append-system-prompt <prompt>` | Append to the default system prompt |
+| `--settings <file>` | Point at an alternate settings file |
 
-## Per-Agent Invocation Guide
+Run `claude --help` for the full, current list — flags change between CLI releases and this table
+is not exhaustive. Task-specific behavior (a security audit, a PR review) comes from what you type
+in the prompt or from a slash command / skill, not from a dedicated flag.
 
----
-
-### Jarvis (CEO / Default)
-
-**Model:** claude-opus-4-8  
-**Claude Code:**
+Background CLI spawn pattern used across this repo (see root `CLAUDE.md`):
 ```bash
-# Default — loads automatically when no agent specified
-claude
-
-# Explicit invocation
-claude --agent jarvis
-
-# With flags
-claude --agent jarvis --skip-mcp          # Skip MCP tools (faster startup)
-claude --agent jarvis --agenda-only       # Weekly agenda only, no deep work
-claude --agent jarvis --focus=repo-name   # Focus on a specific repo
-claude --agent jarvis --weekly-review     # Trigger weekly review ritual
-```
-
-**Gemini:**
-```bash
-gemini --agent jarvis
-```
-
-
-**Best-case invocation:**
-```
-claude --agent jarvis --weekly-review
-```
-Triggers the 8-step startup checklist: reviews memory, scans PRs/issues, checks calendar, synthesizes blockers.
-
-**Clarification pattern:**
-```
-If Jarvis asks for clarification, provide: project context, urgency level, and expected output format.
-```
-
-**Escalation pattern:**
-```
-Jarvis is the final escalation point. Escalate from any other agent using:
-"@jarvis — [agent] is blocked on [issue]. [what is needed]"
+claude --bg --agent <name> -p "<full task context, target audience, source material>"
 ```
 
 ---
 
-### Friday (CTO)
+## Antigravity (`agy`)
 
-**Model:** claude-sonnet-4-6  
-**Claude Code:**
-```bash
-claude --agent friday
-claude --agent friday --review-pr                   # PR review mode
-claude --agent friday --pressure-test=auth-flow     # Pressure-test a scenario
-claude --agent friday --arch-review=repo-name       # Architecture review
-```
+Agents are installed to Antigravity via a plugin manifest, not a per-file agent directory:
+`tools/sync-agents.js` writes agent markdown to `~/.gemini/agentsystem-plugin/agents/` and then
+runs `agy plugin install <plugin-dir>` (falling back to printing that command if `agy` is not on
+PATH). Invoke an agent the same way as Claude Code: `agy --agent <name>`.
 
-**Gemini:**
-```bash
-gemini --agent friday
-```
-
-
-**Best-case invocation:**
-```
-claude --agent friday --arch-review=AgentSystem
-```
-
-**Escalation pattern:**
-```
-Friday escalates to Jarvis for unresolved conflicts:
-"@jarvis — Friday needs CEO decision on [X]."
-```
+Hooks, and everything hook-borne (session auto-rename, continuous brain sync at session
+start/end, etc.), do not run under Antigravity — see `docs/harness-support.md` for the full list
+of what is and is not supported per harness.
 
 ---
 
-### Sam (CSO / Security Gate)
+## Escalation patterns
 
-**Model:** claude-sonnet-4-6  
-**Note: Sam is a hard gate. All main merges require Sam's approval.**
+Escalation between agents is a plain `@agent` mention in conversation or a PR/issue comment, not a
+CLI flag. Examples, matching the roles in `docs/AGENTS.md`:
 
-**Claude Code:**
-```bash
-claude --agent sam
-claude --agent sam --pre-merge-audit              # Pre-merge security review
-claude --agent sam --compliance-check=SOC2        # Compliance check
-claude --agent sam --vendor-review=vendor-name    # Vendor security review
-```
+- Any agent → Jarvis: `@jarvis — [agent] is blocked on [issue]. [what is needed]`
+- Friday → Jarvis: `@jarvis — Friday needs a CEO decision on [X]`
+- Ultron/Astra/Pym/Leo → Friday: `@friday — [conflict or architecture question]`
+- Astra (design questions) → Wanda: `@wanda — [question]`
 
-**Gemini:**
-```bash
-gemini --agent sam --pre-merge-audit
-```
-
-
-**Best-case invocation:**
-```
-claude --agent sam --pre-merge-audit
-# Sam reads the PR diff and provides approval or blocking comment.
-```
-
-**Override:** Never bypassed without Jarvis written approval in the PR.
-
----
-
-### Nat (CBO)
-
-**Model:** claude-sonnet-4-6
-
-**Claude Code:**
-```bash
-claude --agent nat
-claude --agent nat --market-analysis=segment-name
-claude --agent nat --revenue-forecast=4
-claude --agent nat --customer-health
-```
-
-**Gemini:**
-```bash
-gemini --agent nat --customer-health
-```
-
-
----
-
-### Ultron (Backend Dev)
-
-**Model:** claude-haiku-4-5  
-
-**Claude Code:**
-```bash
-claude --agent ultron
-claude --agent ultron --api-review
-claude --agent ultron --deploy-check
-claude --agent ultron --service-audit
-```
-
-**Gemini:**
-```bash
-gemini --agent ultron --api-review
-```
-
-
-**Escalation:** Conflicts → `@friday`
-
----
-
-### Astra (Frontend Dev)
-
-**Model:** claude-haiku-4-5
-
-**Claude Code:**
-```bash
-claude --agent astra
-claude --agent astra --component-review
-claude --agent astra --e2e-test
-claude --agent astra --perf-audit
-```
-
-**Gemini:**
-```bash
-gemini --agent astra --component-review
-```
-
-
-**Escalation:** Design questions → `@wanda`. Conflicts → `@friday`
-
----
-
-### Pym (Database)
-
-**Model:** claude-haiku-4-5
-
-**Claude Code:**
-```bash
-claude --agent pym
-claude --agent pym --schema-review
-claude --agent pym --migration-test
-claude --agent pym --perf-check
-```
-
-**Gemini:**
-```bash
-gemini --agent pym --schema-review
-```
-
-
-**Escalation:** Conflicts → `@friday`
-
----
-
-### Leo (DevOps)
-
-**Model:** claude-haiku-4-5
-
-**Claude Code:**
-```bash
-claude --agent leo
-claude --agent leo --ci-review
-claude --agent leo --infra-audit
-claude --agent leo --deploy-test
-```
-
-**Gemini:**
-```bash
-gemini --agent leo --ci-review
-```
-
-
-**Escalation:** Conflicts → `@friday`
-
----
-
-### Wanda (Design)
-
-**Model:** claude-sonnet-4-6
-
-**Claude Code:**
-```bash
-claude --agent wanda
-claude --agent wanda --design-review=ComponentName
-claude --agent wanda --system-audit
-claude --agent wanda --ux-feedback
-```
-
-**Gemini:**
-```bash
-gemini --agent wanda --design-review=Button
-```
-
-
-**Escalation:** Technical issues → `@friday`
-
----
-
-### Threepio (Docs)
-
-**Model:** claude-sonnet-4-6
-
-**Claude Code:**
-```bash
-claude --agent threepio
-claude --agent threepio --pr-description
-claude --agent threepio --changelog
-claude --agent threepio --handoff
-claude --agent threepio --release-notes
-```
-
-**Gemini:**
-```bash
-gemini --agent threepio --pr-description
-```
-
+Sam is a hard gate on all `main` merges (pre-merge security audit); it is never bypassed without
+explicit written approval recorded in the PR.
 
 ---
 
 ## Troubleshooting
 
-### Agent Timeout
-
-**Symptom:** No response within expected latency window (3x normal p50).
+### Agent doesn't respond as expected
 
 **Steps:**
-1. Re-invoke the agent — transient issues are common.
-2. If second attempt fails, check agent file validity: confirm `---` frontmatter and non-empty body.
-3. Try without flags: `claude --agent [name]`
-4. Escalate via `@friday` or `@jarvis` depending on the agent.
+1. Re-invoke the agent — transient issues happen.
+2. Confirm the agent file is valid: `.agents/agents/<name>.md` has `---` frontmatter and a
+   non-empty body.
+3. Run `node tools/sync-agents.js --check` to confirm the installed copy (`~/.claude/agents/` or
+   `~/.gemini/agentsystem-plugin/agents/`) matches the repo source.
+4. Try the plain invocation with no extra prompt content: `claude --agent <name>`.
+5. Escalate via `@friday` or `@jarvis` depending on the agent's domain.
 
 ---
 
-### Auth Failure
+### Auth failure
 
 **Symptom:** `Error: unauthorized` or `agent not found`.
 
 **Claude Code:**
-1. Run `claude --version` — confirm CLI is current.
-2. Re-authenticate: `claude auth login`
-3. Confirm agent file exists: `%USERPROFILE%\.claude\agents\[name].md`
+1. `claude --version` — confirm the CLI is current.
+2. Re-authenticate per Claude Code's normal auth flow (`/login` inside a session, or see
+   Anthropic's Claude Code docs — there is no `claude auth login` subcommand in this CLI version).
+3. Confirm the agent file exists: `%USERPROFILE%\.claude\agents\<name>.md`.
 
-**Gemini:**
-1. Run `gemini --version`
-2. Re-authenticate: `gemini auth login`
-3. Confirm agent file exists: `%USERPROFILE%\.gemini\antigravity-cli\agent\[name].json`
+**Antigravity:**
+1. Confirm `agy` is installed and on PATH.
+2. Confirm the plugin is installed: `agy plugin install ~/.gemini/agentsystem-plugin` (this is
+   also what `tools/sync-agents.js` runs automatically when `agy` is found).
+3. Confirm the agent file exists: `%USERPROFILE%\.gemini\agentsystem-plugin\agents\<name>.md`.
 
 ---
 
-### Memory Not Found
+### Memory not found
 
 **Symptom:** Agent reports no memory or starts without prior context.
 
 **Steps:**
-1. Live memory is the graph brain under `~/agent-memory/nexus/` — query via `node tools/graph/graph-query.js`
-2. Run sync: `node tools/sync-agents.js`
+1. Live memory is the graph brain under `~/agent-memory/nexus/` — query via
+   `node tools/graph/graph-query.js agentsystem <keywords>`.
+2. Run `node tools/sync-agents.js` to make sure the agent definitions themselves are in sync.
 3. `.agents/memory/*.md` is deprecated (#117) and no longer present — historical scratch notes,
    read by no tool. This repo is public and deleting a file from HEAD does not remove it from
    history, so keep client and infrastructure specifics out of anything committed here.
 
 ---
 
-### Agent Loads But Ignores Domain Routing
+### Agent loads but ignores domain routing
 
 **Symptom:** Jarvis not routing to the expected domain agent.
 
 **Steps:**
-1. Check `AGENTS.md` routing rules — is the task description triggering the right pattern?
-2. Use explicit `--agent [name]` to bypass routing and invoke directly.
-3. If routing rule is wrong, update `AGENTS.md` routing section and sync.
+1. Check `docs/AGENTS.md` routing rules — is the task description triggering the right pattern?
+2. Use explicit `--agent <name>` to bypass routing and invoke directly.
+3. If the routing rule itself is wrong, update the routing section in `docs/AGENTS.md` and re-run
+   `node tools/sync-agents.js`.

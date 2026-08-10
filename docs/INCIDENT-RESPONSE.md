@@ -12,7 +12,7 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 **Detection:** Agent has not produced output or updated memory within its SLA window (see ESCALATION-CONVENTIONS.md).
 
 **Diagnostic steps:**
-1. Check `.agents/memory/<agent>.md` — is there a recent session log entry?
+1. Check `~/agent-memory/nexus/agent-brain/<agent>/nodes/` — is there a recent session log entry?
 2. Check GitHub Issues for the current task — has the agent posted an update?
 3. Check if the agent file is valid: `cat .agents/agents/<agent>.md` — confirm frontmatter and body present.
 
@@ -20,7 +20,8 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 1. Re-invoke the agent with the same task + `--resume` context.
 2. If second attempt fails within 15 min, escalate to Friday (CTO) via @friday mention.
 3. Friday either retakes the task or re-delegates to a different capable agent.
-4. Update `.agents/memory/<agent>.md` with incident note.
+4. Record the incident via `node tools/graph/graph-weight.js` or a note under
+   `~/agent-memory/nexus/agent-brain/<agent>/nodes/` (see root `CLAUDE.md` → "Memory").
 
 **Escalation criteria:** Two consecutive timeouts → Friday decides whether to suspend agent and delegate domain to another.
 
@@ -33,7 +34,9 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 **Detection:**
 - `.agents/sync.log` shows error or no entry within expected window.
 - File timestamps in `%USERPROFILE%\.claude\agents\` are older than last commit.
-- CI sync-verification job fails (see `.github/workflows/sync-verification.yml`).
+- `node tools/sync-agents.js --check` exits 1 (drift between `.agents/agents/` and installed
+  copies). There is no CI workflow for this — it runs on demand and in the daily
+  `enforcement-drift-check` job.
 
 **Diagnostic steps:**
 1. Read last entries in `.agents/sync.log` — identify which step failed.
@@ -46,7 +49,7 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 2. Re-run: `node tools/sync-agents.js`
 3. Verify output: check timestamps of `%USERPROFILE%\.claude\agents\*.md` match current time.
 4. If sync still fails, manually copy `.agents/agents/<agent>.md` to `%USERPROFILE%\.claude\agents\`.
-5. Log the incident in `.agents/memory/friday.md`.
+5. Log the incident under `~/agent-memory/nexus/agent-brain/friday/nodes/`.
 
 **Escalation criteria:** Sync fails 3 consecutive times → Leo (DevOps) investigates script; Friday reviews agent file validity.
 
@@ -59,7 +62,7 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 **Detection:** Two agents have made incompatible decisions (e.g., Ultron chose tech stack A, Friday chose tech stack B for same component).
 
 **Diagnostic steps:**
-1. Identify both decisions in respective memory files (`.agents/memory/<agent>.md`).
+1. Identify both decisions in respective memory files (`~/agent-memory/nexus/agent-brain/<agent>/nodes/`).
 2. Determine which decision was made first (timestamp in memory log).
 3. Determine which agent has authority over the domain per `AGENTS.md` routing rules.
 
@@ -127,7 +130,10 @@ Step-by-step runbooks for common agent system failures. Each procedure includes 
 4. Re-run CI.
 
 *Lint/format:*
-1. Run linter locally: `npm run lint --fix` or equivalent.
+1. There is no `npm run lint` script in this repo (`package.json` only defines `test`,
+   `test:graph`, `test:memory`, `test:mission-control`, `mcp`). If a workflow step names a specific
+   linter (e.g. `tools/workflow-lint.js`, which only lints GitHub Actions workflow files), run that
+   tool directly and fix what it reports.
 2. Commit the fix.
 
 *Sync failure:*

@@ -23,26 +23,27 @@ Issue → Friday works → PR opens → Sam audits → Tests pass → Auto-merge
 
 ## One-time GitHub setup (run from repo root)
 
+There is no `dev` branch in this repo — `main` is the only long-lived branch, and it is the only
+one protected.
+
 ```powershell
 # 1. Enable auto-merge on the repo (required for --auto flag to work)
 gh repo edit --enable-auto-merge
 
-# 2. Protect dev branch: require Sam audit + tests before merge
-gh api repos/:owner/:repo/branches/dev/protection `
-  --method PUT `
-  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js tests"]}' `
-  --field enforce_admins=false `
-  --field required_pull_request_reviews='{"required_approving_review_count":0,"dismiss_stale_reviews":true}' `
-  --field restrictions=null
-
-# 3. Protect main branch: same checks, stricter
+# 2. Protect main branch: require Sam audit + tests + issue link + loadable workflows
 gh api repos/:owner/:repo/branches/main/protection `
   --method PUT `
-  --field required_status_checks='{"strict":true,"contexts":["Security Audit (Sam CSO)","Node.js tests"]}' `
-  --field enforce_admins=false `
-  --field required_pull_request_reviews='{"required_approving_review_count":1,"dismiss_stale_reviews":true}' `
+  --field required_status_checks='{"strict":true,"contexts":["Node.js tests","Security Audit (Sam CSO)","PR must be linked to an issue","Workflow files must be loadable"]}' `
+  --field enforce_admins=true `
+  --field required_pull_request_reviews='{"required_approving_review_count":0,"dismiss_stale_reviews":true}' `
   --field restrictions=null
 ```
+
+**Live state as of 2026-08-10** (`gh api repos/Zene8/AgentSystem/branches/main/protection`):
+required contexts are `Node.js tests`, `Security Audit (Sam CSO)`, `PR must be linked to an issue`,
+`Workflow files must be loadable`; `enforce_admins: true`; `required_approving_review_count: 0`
+(Sam's audit is the approval gate, not a human review count). Re-run the query above before
+copying these values elsewhere — this doc is a setup script, not the source of truth.
 
 ## Self-hosted runner required
 
