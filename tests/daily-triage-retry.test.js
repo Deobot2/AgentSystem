@@ -73,7 +73,13 @@ echo "stub ran more times than the plan allows"; exit 99
 
   mkdirSync(join(dir, 'closeouts'));
   if (closeout) {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date, not `toISOString()`. The step under test — and the stub above — resolve the
+    // closeout with `date +%F`, which is LOCAL. A UTC seed made this test fail every day between
+    // local 17:00 and midnight on a Pacific host, and pass the rest of the day (#369); two
+    // separate agents read that as a pre-existing product defect. The runner is UTC, so both
+    // sides agree in production — the flake was purely in this seed.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     writeFileSync(join(dir, 'closeouts', `${today}.md`), '# closeout\n\nreal content\n');
   }
 
