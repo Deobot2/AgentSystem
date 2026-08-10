@@ -2,7 +2,16 @@
 
 **Last Updated:** 2026-05-21  
 **Owner:** Friday (CTO)  
-**Generated:** Weekly by Friday, posted to `.agents/memory/friday.md`
+**Status:** UNIMPLEMENTED PROPOSAL — this entire pipeline is aspirational. Nothing in this repo
+generates the weekly report, scans for `[ESCALATION]`/`[REVERSAL]` tags, or produces the trend
+dashboard described below. It also depends on a "Jarvis startup ritual" step 7-of-8 and a
+`.agents/memory/*.md` tag scan, neither of which exist (memory moved to the per-agent graph brain
+under #117, and no startup step scans it for these tags). If you're looking for what actually runs
+today, see the real automation instead: `tools/decision-log.js` (decision logging),
+`tools/session-cost.js` (cost/session tracking), and the `weekly-agent-review` /
+`weekly-trust-scores` cron jobs in `.github/workflows/scheduled-tasks.yml`. Kept as a design
+reference for anyone who wants to build this dashboard for real; do not treat any number or report
+format below as something the system currently produces.
 
 ---
 

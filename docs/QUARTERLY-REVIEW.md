@@ -1,8 +1,9 @@
 # Quarterly Agent System Deep Review
 
-**Last Updated:** 2026-05-21  
+**Last Updated:** 2026-08-10  
 **Owner:** Jarvis (CEO)  
-**Next Scheduled:** 2026-07-01 (first week of Q3)
+**Next Scheduled:** 2026-07-01 (first week of Q3) — check `HANDOFF.md` / decision log for whether
+this has since run; the schedule table below has not been reconciled against actual occurrences.
 
 ---
 
@@ -38,18 +39,24 @@
 - [ ] Identify any recurring conflict between agents — does routing need refinement?
 
 ### 2. Model Fit Review (20 min)
-- [ ] Are the assigned models (claude-opus-4-8 for Jarvis, etc.) still appropriate for each agent's workload?
+- [ ] Are the assigned models (see `MODELS` map in `tools/sync-agents.js` — currently
+      `claude-opus-5` for Jarvis/Sam, `claude-sonnet-5` for Friday/Nat/clarification-needed,
+      `claude-haiku-4-5-20251001` for the specialist/worker agents) still appropriate for each
+      agent's workload?
 - [ ] Any new model capabilities that should be adopted?
 - [ ] Any cost/performance tradeoffs worth adjusting?
 
 ### 3. Memory System Health (20 min)
-- [ ] Are all 11 agents' memory files up to date (last entry within 7 days of last activity)?
-- [ ] Is `.agents/AGENTS-MEMORY.md` index current?
-- [ ] Any memory corruption or sync failures this quarter?
-- [ ] Is the sync log (`.agents/sync.log`) showing clean runs?
+- [ ] Are all 12 agents' memory nodes up to date? Check
+      `~/agent-memory/nexus/agent-brain/<agent>/nodes/` (the flat `.agents/memory/*.md` layout and
+      `.agents/AGENTS-MEMORY.md` index were deprecated by #117 and no longer exist).
+- [ ] Any memory corruption or sync failures this quarter? Check `node tools/brain-sync.js --status`.
+- [ ] Is agent-definition sync clean? `node tools/sync-agents.js --check` should exit 0.
 
 ### 4. Test Coverage Review (15 min)
-- [ ] Current coverage % vs target (>80%)?
+- [ ] Full suite green? `npm test` (no coverage-percentage tool is currently wired up in this repo —
+      there is no `>80%` coverage target being measured; if you want that number, run a coverage
+      tool manually and record the baseline here, since none exists yet).
 - [ ] Any untested domains or agents?
 - [ ] Are the 5 minimum sprint tests being maintained?
 
@@ -77,7 +84,8 @@
 
 ## Output Template
 
-Store in `.agents/memory/` as `quarterly-review-YYYY-QN.md` with creation timestamp.
+Store via `node tools/brain-remember.js` (or `node tools/decision-log.js`) — not a flat file in
+`.agents/memory/`, which was deprecated by #117 and no longer exists.
 
 ```markdown
 # Quarterly Review — [YYYY Q#]
@@ -147,8 +155,9 @@ Required attendees: Jarvis, Friday, Sam, Nat
 Optional: Wanda (if design debt on agenda)
 
 Pre-read: 
-- .agents/AGENTS-MEMORY.md
-- docs/METRICS-DASHBOARD.md (last quarter trends)
+- node tools/graph/graph-query.js agentsystem <keywords> (recent decisions)
+- docs/METRICS-DASHBOARD.md — NOTE: this describes an unimplemented metrics proposal, not a live
+  trend report; there is nothing to pull real numbers from there yet.
 - docs/ESCALATION-CONVENTIONS.md
 ```
 

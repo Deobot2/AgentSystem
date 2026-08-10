@@ -1,6 +1,14 @@
 # ADR-001: Agent System Architecture Review & Enhancement
 
-**Status:** Proposed (Review & Implementation Pending)
+**Status:** Adopted and implemented. Option B (below) was built out: Jarvis is the documented
+default entry agent (`~/.claude/CLAUDE.md`), routing/coordination rules live in `docs/AGENTS.md`,
+memory moved twice — first to `.agents/memory/<agent>.md` per this ADR's AD-04, then superseded by
+the per-agent graph brain at `~/agent-memory/nexus/agent-brain/<agent>/nodes/` (#117) — and the
+roster grew from 11 agents to the current 12 (`jarvis`, `friday`, `sam`, `nat`, `ultron`, `pym`,
+`leo`, `astra`, `wanda`, `threepio`, `r2d2`, `clarification-needed`, per `tools/sync-agents.js`).
+The historical analysis below (agent counts, model names, comparison tables) reflects the state on
+2026-05-21 and is kept for context, not current fact — see `docs/AGENTS.md` for the live roster and
+routing rules.
 **Date:** 2026-05-21
 **Deciders:** User (system architect), potentially Friday (CTO), Jarvis (CEO)
 **Reviewers:** All agents (domain-specific feedback)
@@ -445,3 +453,10 @@ Rationale:
 5. Scales to 10-15 agents without major refactoring
 
 Next step: Convert action items to GitHub Issues and begin implementation.
+
+**Outcome (added retroactively, 2026-08-10):** All ten action items (AD-01 through AD-10) were
+completed. AD-01/AD-02/AD-03/AD-08 live in `docs/AGENTS.md`; AD-04's memory structure was replaced
+by the graph-brain memory system (#117) rather than kept as flat `.agents/memory/*.md` files;
+AD-06 is documented as `claude --agent <name>` / in-session `Agent({ subagent_type: ... })`; AD-07
+(Threepio, r2d2) and AD-09 (sync script, `tools/sync-agents.js`) are both implemented and covered
+by `tools/sync-agents.js --check`.

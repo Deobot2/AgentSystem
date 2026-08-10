@@ -46,13 +46,13 @@ This is a credible cognitive model — it independently implements the things th
 
 ### 1.3 The four concrete defects
 
-1. **Retrieval not invoked + a path bug.** The efficient query exists but agents `ls`+`read` flat files instead. Worse: Jarvis's own startup command (`jarvis.md:79,128,132`) queries `--brain-path=~/agent-memory/nexus` → looks for `nexus/graph.json`. The graph is actually at `nexus/personal-brain/graph.json`. **The documented command errors every time.**
+1. **Retrieval not invoked + a path bug.** The efficient query exists but agents `ls`+`read` flat files instead. Worse: Jarvis's own startup command (`jarvis.md:79,128,132`) queries `--brain-path=~/agent-memory/nexus` → looks for `nexus/graph.json`. The graph is actually at `nexus/personal-brain/graph.json`. **The documented command errors every time.** — **(RESOLVED — see §9, "P0 — Tilde expansion bug")**
 
-2. **Personal brain was never populated as a graph.** `personal-brain-split.js` existed but the `nodes/` directory did not exist until it was run manually today (→ 37 nodes, 31 edges). The "Monday 8am" cron in `scheduled-tasks.yml:25-33` is on a **`self-hosted` runner that has not been executing** (nodes absent despite the schedule). So even the wired consolidation isn't actually running.
+2. **Personal brain was never populated as a graph.** `personal-brain-split.js` existed but the `nodes/` directory did not exist until it was run manually today (→ 37 nodes, 31 edges). The "Monday 8am" cron in `scheduled-tasks.yml:25-33` is on a **`self-hosted` runner that has not been executing** (nodes absent despite the schedule). So even the wired consolidation isn't actually running. — **(RESOLVED — see §9, "P1 — Scheduled memory jobs"; the current mechanism is the routines engine + `.github/workflows/scheduled-tasks.yml` cron, not the Task-Scheduler-only fix §9 first shipped)**
 
-3. **No automatic write-back.** `sona-append.js`, `decision-log.js`, `task-scratchpad.js` are all orphaned. Nothing captures facts *during* a session. That is why "the breakdown of me isn't detailed" — collection is manual, and `user-brain.md` was last hand-edited 2026-05-27.
+3. **No automatic write-back.** `sona-append.js`, `decision-log.js`, `task-scratchpad.js` are all orphaned. Nothing captures facts *during* a session. That is why "the breakdown of me isn't detailed" — collection is manual, and `user-brain.md` was last hand-edited 2026-05-27. — **(PARTIALLY RESOLVED — see §9, "P2"; `sona-append.js` remains an agent-invoked tool by design, not a hook, per §9's stated reasoning. `decision-log.js` is now actively used, e.g. by Jarvis's arbitration flow in `.agents/agents/jarvis.md`.)**
 
-4. **No episodic→semantic consolidation in the cycle.** `graph-consolidate.js` (distills outcome clusters → `reasoning-bank.md`) is orphaned. No importance score is written at encode time (`computeSalience` is never called during writes). No per-project read scoping — queries cross-contaminate across repos.
+4. **No episodic→semantic consolidation in the cycle.** `graph-consolidate.js` (distills outcome clusters → `reasoning-bank.md`) is orphaned. No importance score is written at encode time (`computeSalience` is never called during writes). No per-project read scoping — queries cross-contaminate across repos. — **(RESOLVED — see §9, "P2 — computeSalience at encode" and "P2b — Wikilink sync"; per-project read scoping not independently re-verified in this pass)**
 
 ---
 

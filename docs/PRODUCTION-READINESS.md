@@ -1,5 +1,15 @@
 # Production Readiness Assessment
 
+> **HISTORICAL SNAPSHOT — dated 2026-05-25, pre-#117.** This assessment measures the 9 ADR-001
+> Option B requirements (default entry, routing, memory structure, etc.) against the roster and
+> memory design that existed before the #117 memory migration. Item 6 ("Memory structure — DONE,
+> `.agents/memory/` + TEMPLATE.md") is now false as written: that path was deleted and replaced by
+> the per-agent graph brain at `~/agent-memory/nexus/agent-brain/<agent>/nodes/`. The other 8
+> requirements (default entry, hard security gate, routing, orchestration, coordination rules,
+> startup procedure, bypass mechanism) remain true today, documented in `docs/AGENTS.md` and
+> `~/.claude/CLAUDE.md`. The agent count below (11) is also stale — the current roster is 12. Kept
+> for historical record of the ADR-001 rollout; use `docs/AGENTS.md` for current state.
+
 **Date:** 2026-05-25
 **Status:** ✅ **PRODUCTION-READY** — all 9 requirements met as of 2026-05-21 enhancements.
 

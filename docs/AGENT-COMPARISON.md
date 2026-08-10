@@ -3,6 +3,16 @@
 **Comparison Date:** 2026-05-21
 **Purpose:** Identify strengths, gaps, and recommendations for each agent category
 
+> **HISTORICAL SNAPSHOT — dated 2026-05-21, not current.** This document compares the agent
+> system as it existed before ADR-001's Option B was implemented. Every gap it identifies against
+> Jarvis (no default entry, no startup procedure, no routing) is closed — see `~/.claude/CLAUDE.md`
+> and `docs/AGENTS.md`. The per-agent grades below (including Threepio's "D — Definition thin,
+> unclear scope") describe the pre-implementation roster; Threepio, r2d2, and every other agent now
+> have full definitions in `.agents/agents/<name>.md`, synced via `tools/sync-agents.js` (12 agents,
+> `--check` passes). The "Effort to Production Ready" estimate at the bottom is likewise resolved —
+> the work it lists was completed. Kept for historical context only; do not use it to judge current
+> agent capability.
+
 ---
 
 ## 1. Orchestration / Leadership

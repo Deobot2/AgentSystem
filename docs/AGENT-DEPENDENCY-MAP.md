@@ -83,6 +83,15 @@ Detect → Sam (owns it) → Jarvis (escalation if >30min blocker)
 
 ## Failure Mode Analysis
 
+**ASPIRATIONAL — not implemented.** The table and retry conventions below describe a proposed
+retry/SLA/timeout automation layer. No code in this repo enforces these timeouts, retry counts, or
+escalation triggers; there is no scheduler watching "PR not opened >2h" or "no response >24h"
+conditions. The only mechanically enforced items in the whole system are Sam's pre-merge gate
+(`sam-audit.yml`, a required check on `main`) and `guard-git.sh` (hard-blocks dangerous git ops).
+Everything else here is a documented convention agents are expected to follow voluntarily, not a
+working system. Kept as a design reference for anyone who wants to build this; do not read it as
+current behavior.
+
 | Agent | Failure Mode | Detection Signal | Who Retries | Timeout | Override / Recovery |
 |---|---|---|---|---|---|
 | Jarvis | Startup fails / no response | No session log update in >3h | Self-retry once | 30 min | Escalate to Nathan directly |
@@ -99,7 +108,7 @@ Detect → Sam (owns it) → Jarvis (escalation if >30min blocker)
 
 ---
 
-## Retry Conventions
+## Retry Conventions (proposed, unimplemented)
 
 - **Max retries:** 2 for all automated agents; 1 for human-gate agents (Sam, Jarvis)
 - **Backoff:** 5 min wait between retries for network-related failures
@@ -115,7 +124,7 @@ User input → Jarvis (routing decision)
            → Agent (domain work → produces artifact: code, doc, decision)
            → Sam (security check if main-bound)
            → main branch (via PR + CI)
-           → .agents/memory/<agent>.md (decision log updated)
+           → ~/agent-memory/nexus/agent-brain/<agent>/nodes/ (memory written via
+             tools/brain-remember.js — flat .agents/memory/<agent>.md files were deprecated by #117)
            → HANDOFF.md (in-flight/blockers updated if needed)
-           → .agents/AGENTS-MEMORY.md (index updated weekly by Jarvis)
 ```

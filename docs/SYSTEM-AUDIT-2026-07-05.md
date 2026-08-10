@@ -1,5 +1,24 @@
 # AgentSystem Full Audit — 2026-07-05
 
+> **ARCHIVED — point-in-time snapshot from 2026-07-05, not current status.** Most of the CRITICAL/
+> ROOT CAUSE findings below are now resolved:
+> - Self-hosted runner offline (§4 root cause, feature #37-#41) — runner is online; branch
+>   protection on `main` now has 4 required status checks including `sam-audit.yml`.
+> - `generate-routing-table.js` wipe bug (#1 in the critical list) — the tool now has strict flag
+>   validation and refuses an empty write.
+> - Cron routines never-run (#3; feature #32) — `weekly-agent-review` and other cron routines are
+>   registered in `.github/workflows/scheduled-tasks.yml` and `node tools/routines.js verify`
+>   passes.
+> - Trust-score pipeline never-run (#6; feature #25) — `weekly-trust-scores` cron now runs.
+> - `.agents/memory/*.md` review templates (feature #11) — intentionally dead; superseded by the
+>   graph-brain memory system (#117), not a bug.
+>
+> Not independently re-verified during this pass: the Mission Control webhook server status
+> (§5), session-cost double-counting suspicion, and the dead/unwired memory tools list
+> (memory-embed.js etc.) — treat those specific items as unconfirmed either way. Kept for
+> historical record of what a full audit looked like and as a template for future ones; do not
+> use it to judge current system health.
+
 Post PR #153 merge. Four parallel auditors: CI/Mission Control, Agents/Orchestration, Hooks/Routines, Memory. Statuses: **FUNCTIONAL / PARTIAL / BROKEN / NEVER-RUN / DEAD**.
 
 ---

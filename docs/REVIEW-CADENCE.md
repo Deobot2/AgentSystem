@@ -1,9 +1,16 @@
 # Agent Decision Review Cadence
 
-**Last Updated:** 2026-05-21  
+**Last Updated:** 2026-08-10  
 **Owner:** Jarvis (CEO)
 
 Structured review schedule for agent decisions, system health, and performance trends.
+
+Note: the **weekly** and **monthly** reviews below were designed as manual, human-triggered
+process (Friday posts a report by hand). They have since been superseded by the automated
+`weekly-agent-review` cron job (`config/routines.yml`, Sat 09:00 UTC, registered in
+`.github/workflows/scheduled-tasks.yml`), which runs headless Jarvis and writes to
+`node tools/decision-log.js`, not a memory file. The manual cadence described here is kept for the
+**Quarterly** review, which is still a human-run process — see `QUARTERLY-REVIEW.md`.
 
 ---
 
@@ -12,7 +19,9 @@ Structured review schedule for agent decisions, system health, and performance t
 ### Weekly — Friday Metrics Pulse (Every Friday, async)
 **Who:** Friday (CTO)  
 **Duration:** 30 min  
-**Output:** Weekly report posted to `.agents/memory/friday.md`  
+**Output:** Historically a report posted to `.agents/memory/friday.md`; that path was deprecated by
+#117. This manual review is superseded by the automated `weekly-agent-review` cron (see note above)
+— treat this section as historical unless you are deliberately reviving the manual version.
 **Covers:**
 - Decision volume, escalation %, reversal %
 - Execution time p50/p95
@@ -26,7 +35,10 @@ Structured review schedule for agent decisions, system health, and performance t
 ### Monthly — Friday CTO Review (1st Monday of each month, 2h)
 **Who:** Friday (CTO)  
 **Duration:** 2h  
-**Output:** Monthly summary appended to `.agents/memory/friday.md`  
+**Output:** Historically a summary appended to `.agents/memory/friday.md` (path deprecated by
+#117); current memory writes go through `node tools/brain-remember.js` to
+`~/agent-memory/nexus/agent-brain/friday/nodes/`. As with the weekly pulse, this manual cadence is
+superseded in practice by the automated weekly cron.
 **Schedule:** First occurrence: 2026-06-01  
 **Covers:**
 - Last month's escalations and reversals (review decisions, check patterns)
@@ -60,15 +72,19 @@ Structured review schedule for agent decisions, system health, and performance t
 **Who:** Jarvis (CEO), Friday (CTO), Sam (CSO), Nat (CBO)  
 **Duration:** 4h  
 **Schedule:** 2026-07-01 (next occurrence after system launch)  
-**Output:** Quarterly review findings doc in `.agents/memory/` with timestamp  
+**Output:** Quarterly review findings doc — store via `node tools/brain-remember.js` under the
+relevant agent's node directory, or as a decision-log entry via `node tools/decision-log.js`, not a
+flat `.agents/memory/` file (deprecated, #117).  
 **Covers:** See QUARTERLY-REVIEW.md for full checklist  
 
 ---
 
 ## Decision Log
 
-All decisions are logged in `.agents/memory/<agent>.md` with date and tags.  
-Index of recent decisions: [.agents/AGENTS-MEMORY.md](.agents/AGENTS-MEMORY.md)
+Decisions are logged via `node tools/decision-log.js` and via per-agent memory writes
+(`node tools/brain-remember.js`) to `~/agent-memory/nexus/agent-brain/<agent>/nodes/`. Query with
+`node tools/graph/graph-query.js agentsystem <keywords>`. The flat `.agents/memory/<agent>.md` /
+`.agents/AGENTS-MEMORY.md` files referenced in earlier drafts of this doc no longer exist (#117).
 
 ---
 
@@ -86,7 +102,7 @@ Agenda:
 4. Next month engineering priorities
 
 Attendees: Friday (CTO)
-Output: Monthly summary in .agents/memory/friday.md
+Output: Monthly summary via node tools/decision-log.js
 ```
 
 **Quarterly System Review:** See QUARTERLY-REVIEW.md for invite template.

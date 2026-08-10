@@ -1,6 +1,6 @@
 # Agent System — Complete Reference
 
-**Last Updated:** 2026-05-21  
+**Last Updated:** 2026-08-10  
 **Status:** Production-ready architecture with comprehensive governance  
 **Single Source of Truth:** This file consolidates all agent definitions, routing rules, domain ownership, and coordination protocols.
 
@@ -14,19 +14,23 @@ See "Bypassing Jarvis" section below for full guidance.
 
 ### Agent Roster
 
+Models below are sourced from the `MODELS.claude` map in `tools/sync-agents.js` — the actual
+source of truth; `tools/sync-agents.js --check` verifies every installed copy matches it.
+
 | Agent | Role | Model | Domain | Reports To |
 |-------|------|-------|--------|-----------|
-| **Jarvis** | CEO & Orchestrator | Opus 4.7 | Cross-domain leadership, strategy, hiring, pivots | — |
-| **Friday** | CTO | Sonnet 4.6 | Engineering decisions, architecture, code audit | Jarvis |
-| **Sam** | CSO | Sonnet 4.6 | Security policies, compliance, pre-merge audit (hard gate) | Jarvis |
-| **Nat** | CBO | Sonnet 4.6 | Business strategy, revenue, GTM, pricing, customer health | Jarvis |
-| **Ultron** | Backend Dev | Sonnet 4.6 | Backend APIs, services, database deployment | Friday |
-| **Astra** | Frontend Dev | Sonnet 4.6 | React/Vue components, UX, a11y, performance | Friday |
-| **Pym** | Database Dev | Sonnet 4.6 | Schema design, migrations, pressure-testing, query optimization | Friday |
-| **Leo** | DevOps | Sonnet 4.6 | CI/CD, infrastructure, observability, deployments | Friday |
-| **Wanda** | Design | Sonnet 4.6 | UI design, design systems, component design, tokens | Friday |
-| **Threepio** | Comms & Docs | Sonnet 4.6 | README, CHANGELOG, PR descriptions, release notes, announcements | Jarvis |
-| **r2d2** | Fallback Dev | Haiku 4.5 | Catch-all for tasks not matching a specialist | — |
+| **Jarvis** | CEO & Orchestrator | claude-opus-5 | Cross-domain leadership, strategy, hiring, pivots | — |
+| **Friday** | CTO | claude-sonnet-5 | Engineering decisions, architecture, code audit | Jarvis |
+| **Sam** | CSO | claude-opus-5 | Security policies, compliance, pre-merge audit (hard gate) | Jarvis |
+| **Nat** | CBO | claude-sonnet-5 | Business strategy, revenue, GTM, pricing, customer health | Jarvis |
+| **Ultron** | Backend Dev | claude-haiku-4-5-20251001 | Backend APIs, services, database deployment | Friday |
+| **Astra** | Frontend Dev | claude-haiku-4-5-20251001 | React/Vue components, UX, a11y, performance | Friday |
+| **Pym** | Database Dev | claude-haiku-4-5-20251001 | Schema design, migrations, pressure-testing, query optimization | Friday |
+| **Leo** | DevOps | claude-haiku-4-5-20251001 | CI/CD, infrastructure, observability, deployments | Friday |
+| **Wanda** | Design | claude-haiku-4-5-20251001 | UI design, design systems, component design, tokens | Friday |
+| **Threepio** | Comms & Docs | claude-haiku-4-5-20251001 | README, CHANGELOG, PR descriptions, release notes, announcements | Jarvis |
+| **r2d2** | Fallback Dev | claude-haiku-4-5-20251001 | Catch-all for tasks not matching a specialist | — |
+| **clarification-needed** | Clarifier | claude-sonnet-5 | Asks clarifying questions when a request is too vague to act on | Jarvis |
 
 ---
 
@@ -74,7 +78,11 @@ See "Bypassing Jarvis" section below for full guidance.
 1. **Each agent owns their domain.** Do not write to another agent's memory or folder without flagging it.
 2. **Cross-domain work requires coordination.** If task spans agents (e.g., backend API + frontend), coordinate via Jarvis. Note in both agent memories + HANDOFF.md.
 3. **GitHub Issues are the task model.** All work tracked as Issues. Agent memories link to Issues, not vice-versa.
-4. **Memory stays in agent file.** Session logs, decisions, learnings belong in `.agents/memory/{agent}.md` or `agents-memory/{agent}.md`.
+4. **Memory stays in the agent brain.** Session logs, decisions, learnings belong in
+   `~/agent-memory/nexus/agent-brain/<agent>/nodes/`, written via `node tools/brain-remember.js`.
+   The flat-file paths `.agents/memory/{agent}.md` and `agents-memory/{agent}.md` described in an
+   earlier version of this doc were deprecated by #117 and no longer exist — see "Memory
+   Structure" below.
 5. **HANDOFF.md tracks blockers.** If Agent A waits on Agent B, note it in HANDOFF.md "What's blocked" section. Jarvis monitors on startup.
 6. **Escalation is transparent.** When escalating to Jarvis, state why in GitHub Discussion or agent memory.
 7. **Bypass is documented.** Users can invoke agents directly to skip Jarvis. Agent respects the direct request.
@@ -86,55 +94,25 @@ See "Bypassing Jarvis" section below for full guidance.
 
 ## Startup Procedure
 
-**Every Jarvis session (16 steps, 4 phases):**
+**Source of truth:** `.agents/agents/jarvis.md` → "Startup (9 steps, run in parallel where
+marked)". This section summarizes it; if the two disagree, `jarvis.md` wins. It is skipped
+entirely for trivial/identity/lookup queries — Jarvis answers those inline via
+`memory-context.js` / `graph-query.js` rather than loading MCPs or spawning agents.
 
-### Phase 1: Read Memory (2 steps)
-1. **Read agents-memory/jarvis.md**
-   - Decision Log: recent decisions?
-   - Critical Risks: any HIGH items overdue?
-   - Escalations: any @-mentions awaiting response?
-
-2. **Read agents-memory/{friday,nat,sam}.md**
-   - Check Decision Log: recent architecture/business/security decisions?
-   - Check Critical Risks: cross-domain risks?
-
-### Phase 2: Scan Multi-Repo State (5 steps)
-3. **Query GitHub PRs (last 48h merged)**
-   - MCP: GitHub `gh pr list --state merged`
-   - Fallback: Read HANDOFF.md "What shipped" section
-
-4. **Scan HANDOFF.md files** across all repos
-   - Shipped work, blockers, due dates
-
-5. **Check GitHub Issues (stale + overdue)**
-   - Issues >2 weeks without progress
-
-6. **Scan GitHub Discussions** for strategic decisions awaiting
-
-7. **Check Obsidian vault** or personal notes (if available)
-
-### Phase 3: Probe Edges (4 steps)
-8. **Scan Gmail** (last 24h) for escalations
-
-9. **Calendar scan** (next 7 days) for agent reviews due
-
-10. **Product feedback** + customer signal — any new risks?
-
-11. **Agent memory currency check** — last session <3 days old?
-
-### Phase 4: Synthesize + Act (5 steps)
-12. **Synthesize cross-project health**
-    - Cross-reference HANDOFF.md blocked sections
-    - Check Critical Risks for HIGH items >1 week old
-    - Spot dependency chains + bottlenecks
-
-13. **Check escalations** — grep agents-memory/ for unflagged @-mentions
-
-14. **Propose 3-5 agenda items** ordered by risk, priority, deadline
-
-15. **Dispatch agents** — create GitHub Issues with owner + success criteria
-
-16. **Auto-schedule reviews** if calendar available
+1. Load memory context (user + project + recent, one call): `node tools/memory-context.js`
+2. Check inbox: `node tools/agent-message.js --list --to=Jarvis` — act on high-priority messages
+3. Query agent brain for decision log, blockers, last outcomes:
+   `node tools/graph/graph-query.js agent-brain jarvis blockers decisions`
+4. **[parallel]** Three GitHub queries: last-48h merged PRs, open stale issues (>2 weeks),
+   unresolved Discussions
+5. Check for new preference nodes: `node tools/graph/graph-query.js personal-brain --hot-stub
+   --brain-path=~/agent-memory/nexus/personal-brain`
+6. Scan `HANDOFF.md` "blocked" section + agent review due dates in
+   `~/agent-memory/nexus/agent-brain/`
+7. **[parallel]** Probe email (last 24h) + calendar (next 7 days) via MCP
+8. Identify blockers + assess risks + decisions needed
+9. Brief the user with agenda + decision queue, then execute — or, if no task is specified,
+   enter Autonomous Mode ("do work") automatically
 
 ---
 
@@ -144,9 +122,10 @@ See "Bypassing Jarvis" section below for full guidance.
 
 ### CLI Invocation
 ```bash
-claude @ultron --api-review      # Invoke Ultron directly
-claude @friday                    # Load Friday without Jarvis
+claude @ultron      # Invoke Ultron directly
+claude @friday       # Load Friday without Jarvis
 ```
+Per-session override: `claude --agent friday` (see `~/.claude/CLAUDE.md` → "Agent Roster").
 
 ### In Conversation
 ```
@@ -224,7 +203,10 @@ Sam checklist before approving merge:
   - Engineering: Feb/May/Aug/Nov last week → Friday → Jarvis approves
   - Business: Mar/Jun/Sep/Dec last week → Nat → Jarvis approves
 
-See `agents-memory/quarterly-reviews.md` for full schedule and framework.
+See `docs/REVIEW-CADENCE.md` and `docs/QUARTERLY-REVIEW.md` for full schedule and framework
+(`agents-memory/quarterly-reviews.md` does not exist in this repo). Note the automated
+`weekly-agent-review` / `weekly-trust-scores` cron jobs in `.github/workflows/scheduled-tasks.yml`
+are the current mechanized successor to the manual cadence described there.
 
 ---
 
@@ -234,7 +216,7 @@ See `agents-memory/quarterly-reviews.md` for full schedule and framework.
 
 - ✅ Default entry point (Jarvis loads automatically)
 - ✅ Routing rules (explicit task → agent mapping)
-- ✅ Proactive orchestration (Jarvis 16-step startup)
+- ✅ Proactive orchestration (Jarvis 9-step startup)
 - ✅ Memory structure (per-agent session logs and decisions)
 - ✅ Coordination rules (8 explicit protocols)
 - ✅ Domain ownership map (clear agent authority)
@@ -255,15 +237,20 @@ See `agents-memory/quarterly-reviews.md` for full schedule and framework.
 node tools/sync-agents.js
 ```
 
-Generates agent configs for:
+Generates agent configs for both harnesses this system supports (see `docs/harness-support.md`):
 - Claude Code: `%USERPROFILE%\.claude\agents\`
-- Gemini: `%USERPROFILE%\.gemini\agents\`
+- Antigravity: `ANTI_AGENTS_DIR` (the Antigravity plugin's agents directory — not a "Gemini CLI";
+  there is no third CLI)
 
 **Verification after sync:**
+- [ ] `node tools/sync-agents.js --check` exits 0 (all 12 agents match source)
 - [ ] `claude` loads Jarvis by default
 - [ ] `claude @friday` loads Friday
 - [ ] Check `.agents/sync.log` for errors
-- [ ] Verify memory files exist in `%USERPROFILE%\.claude\agents-memory\`
+
+There is no `agents-memory\` directory under `%USERPROFILE%\.claude\` — agent memory lives outside
+this repo entirely, at `~/agent-memory/nexus/agent-brain/<agent>/nodes/` (see "Memory Structure"
+below).
 
 ---
 
@@ -272,7 +259,9 @@ Generates agent configs for:
 - **How do I know if my task needs multiple agents?** → Ask Jarvis. If task spans routing rules, it likely does.
 - **What if I disagree with an agent's decision?** → Flag Jarvis. Agent mediates conflicts.
 - **Can I override the security gate?** → Only Jarvis can approve (written). Sam's gate is non-negotiable.
-- **How do I remember what was decided last session?** → Read `.agents/memory/{agent}.md` session logs.
+- **How do I remember what was decided last session?** → Query the agent brain:
+  `node tools/graph/graph-query.js agentsystem <keywords>` (or `agent-brain <agent> <keywords>`);
+  `.agents/memory/{agent}.md` was deprecated by #117 and no longer exists.
 - **What if an agent is overloaded?** → Flag in HANDOFF.md "What's blocked." Jarvis prioritizes on startup.
 
 ---
@@ -281,8 +270,13 @@ Generates agent configs for:
 
 - **CLAUDE.md** — CLI configuration and default agent setup
 - **HANDOFF.md (repo root)** — Current blockers, what shipped, watch-outs
-- **agents-memory/jarvis.md** — CEO decision log, critical risks, escalations
-- **agents-memory/{agent}.md** — Per-agent session logs, decisions, learnings
+- **`~/agent-memory/nexus/agent-brain/jarvis/nodes/`** — CEO decision log, critical risks,
+  escalations (queried via `graph-query.js`, not read as a flat file)
+- **`~/agent-memory/nexus/agent-brain/<agent>/nodes/`** — Per-agent session logs, decisions,
+  learnings
 - **.agents/agents/{agent}.md** — Agent definitions (master source of truth)
-- **.agents/memory/TEMPLATE.md** — Memory file template
-- **docs/PRODUCTION-READINESS.md** — Assessment of system readiness
+- **docs/PRODUCTION-READINESS.md** — Historical assessment of system readiness (dated 2026-05-25;
+  see its header banner for what's since changed)
+
+`agents-memory/jarvis.md`, `agents-memory/{agent}.md`, and `.agents/memory/TEMPLATE.md` referenced
+in older versions of this doc do not exist in this repo — see "Memory Structure" above.
