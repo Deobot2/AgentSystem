@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { createServer } from 'node:https';
 import { request as httpsRequest } from 'node:https';
 import { homedir } from 'node:os';
+import { isMainModule } from './is-main.js';
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -34,7 +35,7 @@ const sonaFile = join(nexusDir, 'sona-patterns.md');
 const cacheFile = join(nexusDir, 'sona-embeddings.json');
 
 // Only run main execution when invoked directly, not when imported by tests
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('tools/memory-search.js');
+const isMain = isMainModule(import.meta.url);
 
 if (isMain && !query) {
   process.stderr.write('Usage: memory-search.js --query="<text>" [--top=5]\n');

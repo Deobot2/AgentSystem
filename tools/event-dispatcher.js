@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as bus from './event-bus.js';
 import { claudeBgArgs } from './mission-control/claude-args.js';
+import { isMainModule } from './is-main.js';
 
 const TOOLS_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -109,8 +110,7 @@ export function drain(opts) {
 }
 
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('event-dispatcher.js');
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   const maxArg = args.find(a => a.startsWith('--max='));
   const summary = drain({ max: maxArg ? parseInt(maxArg.slice(6), 10) : 100 });
@@ -120,3 +120,5 @@ if (isMain) {
     `| queue: pending=${s.pending} dead=${s.dead}`);
   process.exit(0);
 }
+
+if (isMainModule(import.meta.url)) main();

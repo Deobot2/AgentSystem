@@ -15,6 +15,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { isMainModule } from './is-main.js';
 
 const NEXUS_DIR = path.join(process.env.USERPROFILE || process.env.HOME, 'agent-memory', 'nexus');
 
@@ -180,4 +181,4 @@ async function main() {
   console.log(`  3. Rerun: node graph-orphan-audit.js --fix`);
 }
 
-await main();
+if (isMainModule(import.meta.url)) await main();

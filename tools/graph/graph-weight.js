@@ -9,11 +9,13 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { readGraph, writeGraph, updateVisitCount, updateConfidence } from './graph-lib.js';
+import { isMainModule } from '../is-main.js';
 
 function expandTilde(p) {
   return p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p;
 }
 
+function main() {
 const rawArgs = process.argv.slice(2);
 const flags = {};
 const positional = [];
@@ -86,3 +88,6 @@ if (command === 'deprecate') {
 }
 
 writeGraph(graphPath, graph);
+}
+
+if (isMainModule(import.meta.url)) main();

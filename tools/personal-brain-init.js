@@ -6,7 +6,9 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentMemoryRoot, emptyGraph, writeGraph } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
+function main() {
 const args = process.argv.slice(2);
 const flags = {};
 for (const a of args) {
@@ -127,3 +129,6 @@ if (!existsSync(graphPath)) {
 // After populating user-brain.md, run:
 //   node tools/personal-brain-split.js
 // to split into graph nodes.
+}
+
+if (isMainModule(import.meta.url)) main();

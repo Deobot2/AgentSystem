@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 const CHARS_PER_TOKEN = 4;
 const estTokens = s => Math.ceil((s || '').length / CHARS_PER_TOKEN);
@@ -25,6 +26,7 @@ function safeRun(cmd, args) {
   try { return execFileSync(cmd, args, { encoding: 'utf8', timeout: 5000 }); } catch { return ''; }
 }
 
+function main() {
 const home = homedir();
 const globalClaudeMd = safeRead(join(home, '.claude', 'CLAUDE.md'));
 const repoClaudeMd = safeRead(join(process.cwd(), 'CLAUDE.md'));
@@ -56,3 +58,6 @@ if (process.argv.includes('--json')) {
   console.log(`  ${'TOTAL'.padEnd(40)} ${String(totalBytes).padStart(7)}B  ~${totalTokens} tok`);
   console.log(`\n  Target: <=8000 tok. Current: ~${totalTokens} tok (${totalTokens <= 8000 ? 'OK' : 'OVER'}).`);
 }
+}
+
+if (isMainModule(import.meta.url)) main();

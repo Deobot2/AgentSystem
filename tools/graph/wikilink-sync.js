@@ -9,8 +9,8 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { readGraph } from './graph-lib.js';
+import { isMainModule } from '../is-main.js';
 
 // Re-use tilde expansion (same logic as graph-query.js, kept local to avoid circular deps).
 function expandTilde(p) {
@@ -116,11 +116,7 @@ export function applyWikilinkMap(wikilinkMap, nodesDir, { dryRun = false } = {})
 
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
-const __filename = fileURLToPath(import.meta.url);
-const isMain = process.argv[1] === __filename ||
-  process.argv[1]?.replace(/\\/g, '/') === __filename.replace(/\\/g, '/');
-
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   const flags = {};
   for (const a of args) {
@@ -150,3 +146,5 @@ if (isMain) {
     console.log(`wikilink-sync: ${stats.total} nodes, ${stats.updated} updated, ${stats.skipped} unchanged`);
   }
 }
+
+if (isMainModule(import.meta.url)) main();

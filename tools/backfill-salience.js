@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { computeSalience } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
 function parseArgs() {
   const flags = { dryRun: false, brainPath: null };
@@ -89,4 +90,4 @@ function main() {
   }
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

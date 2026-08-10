@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rename
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 const args = Object.fromEntries(
   process.argv.slice(2)
@@ -171,11 +172,15 @@ function expire() {
   console.log(`${count} decision(s) archived.`);
 }
 
-if      (args.write)  write();
-else if (args.search) search();
-else if (args.list)   list();
-else if (args.expire) expire();
-else {
-  console.error('Specify --write, --search, --list, or --expire');
-  process.exit(1);
+function main() {
+  if      (args.write)  write();
+  else if (args.search) search();
+  else if (args.list)   list();
+  else if (args.expire) expire();
+  else {
+    console.error('Specify --write, --search, --list, or --expire');
+    process.exit(1);
+  }
 }
+
+if (isMainModule(import.meta.url)) main();

@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isMainModule } from './is-main.js';
 
 const DEFAULT_ROOT = path.join(os.homedir(), 'agent-memory', 'nexus', 'events');
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -244,8 +245,7 @@ export function stats(root) {
 
 
 // CLI: publish | list | stats | dead | requeue-dead
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('event-bus.js');
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   const cmd = args[0] || 'stats';
   const flag = (name) => {
@@ -274,3 +274,5 @@ if (isMain) {
     console.log(JSON.stringify(stats(), null, 2));
   }
 }
+
+if (isMainModule(import.meta.url)) main();

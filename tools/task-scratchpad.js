@@ -16,6 +16,9 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rea
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
+
+function main() {
 
 const args = Object.fromEntries(
   process.argv.slice(2)
@@ -109,3 +112,7 @@ else {
   console.error('Specify --init, --write, --read, or --close');
   process.exit(1);
 }
+
+}
+
+if (isMainModule(import.meta.url)) main();

@@ -11,11 +11,13 @@ import {
   addNode, addEdge, pruneOrphanedEdges,
   recomputeComposite, serializeFrontmatter,
 } from './graph-lib.js';
+import { isMainModule } from '../is-main.js';
 
 function expandTilde(p) {
   return p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p;
 }
 
+function main() {
 const rawArgs = process.argv.slice(2);
 const flags = {};
 const positional = [];
@@ -271,3 +273,6 @@ writeFileSync(
 );
 
 console.log(`graph-init: ${graph.nodes.length} nodes, ${graph.edges.length} edges → ${nexusDir}`);
+}
+
+if (isMainModule(import.meta.url)) main();

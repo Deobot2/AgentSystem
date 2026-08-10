@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isMainModule } from './is-main.js';
 
 const LOG_PATH = path.join(os.homedir(), 'agent-memory', 'nexus', 'routine-compliance.jsonl');
 
@@ -35,8 +36,7 @@ export function readLog(logPath = LOG_PATH) {
   });
 }
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('routine-compliance-report.js');
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   const daysArg = args.find(a => a.startsWith('--days='));
   const days = daysArg ? parseInt(daysArg.slice(7), 10) : 7;
@@ -55,3 +55,5 @@ if (isMain) {
     }
   }
 }
+
+if (isMainModule(import.meta.url)) main();

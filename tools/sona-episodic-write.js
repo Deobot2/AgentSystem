@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { isMainModule } from './is-main.js';
 
 function parseArgs() {
   const flags = {};
@@ -66,4 +67,4 @@ ${MARKER}
   }
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

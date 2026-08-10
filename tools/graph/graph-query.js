@@ -66,14 +66,9 @@ export function computeBM25(terms, docContent, df, N, avgdl) {
   return score;
 }
 
-// Detect if running as CLI (not imported as a module).
-// In Node ESM, import.meta.url gives the file URL; process.argv[1] is the entry script path.
-import { fileURLToPath } from 'node:url';
-const __filename = fileURLToPath(import.meta.url);
-const isMain = process.argv[1] === __filename ||
-  process.argv[1]?.replace(/\\/g, '/') === __filename.replace(/\\/g, '/');
+import { isMainModule } from '../is-main.js';
 
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   const flags = {};
   const positional = [];
@@ -337,3 +332,5 @@ if (isMain) {
     }
   }
 }
+
+if (isMainModule(import.meta.url)) main();

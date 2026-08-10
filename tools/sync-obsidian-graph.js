@@ -13,6 +13,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { isMainModule } from './is-main.js';
 
 const NEXUS_DIR = path.join(process.env.HOME || process.env.USERPROFILE, 'agent-memory', 'nexus');
 
@@ -175,4 +176,4 @@ async function main() {
   console.log(`Settings > Graph view > Filter by "Connections" to see edges.`);
 }
 
-await main();
+if (isMainModule(import.meta.url)) await main();

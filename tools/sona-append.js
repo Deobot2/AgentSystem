@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentMemoryRoot } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
 function parseArgs() {
   const args = {};
@@ -76,4 +77,4 @@ function main() {
   console.log(`appended SONA entry for issue #${args.issue}`);
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

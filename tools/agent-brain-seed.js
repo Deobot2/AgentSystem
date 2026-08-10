@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { agentMemoryRoot, readGraph, writeGraph, addNode, addEdge, emptyGraph, parseFrontmatter } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
 const AGENTS = ['jarvis', 'friday', 'sam', 'nat', 'ultron', 'pym', 'leo', 'astra', 'wanda', 'threepio', 'r2d2'];
 
@@ -217,4 +218,4 @@ function main() {
   }
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

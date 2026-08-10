@@ -10,6 +10,7 @@ import {
   pruneOrphanedEdges,
   parseFrontmatter,
 } from './graph/graph-lib.js';
+import { isMainModule } from './is-main.js';
 
 function printHelp() {
   console.log(`
@@ -165,4 +166,4 @@ function main() {
   }
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

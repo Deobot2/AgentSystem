@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { isMainModule } from '../is-main.js';
 
 const HOME = homedir();
 const LOG_BASE = join(HOME, '.agy-mission-control');
@@ -168,7 +169,7 @@ export async function getAgyLog(sessionId, { tail = 100 } = {}) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function main() {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'spawn') {
     const [prompt, repoPath, model, agent, continueId] = args;
@@ -185,6 +186,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('Usage: agy-persistence.js spawn|stop|list [args]');
   }
 }
+
+if (isMainModule(import.meta.url)) main();
 
 /**
  * CONCURRENCY MODEL (per Friday's autonomy rules):

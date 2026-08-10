@@ -13,6 +13,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
+import { isMainModule } from './is-main.js';
 import { homedir } from 'node:os';
 import { cwdToProjectDir } from './session-namer.js';
 
@@ -333,4 +334,4 @@ function main() {
   }
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

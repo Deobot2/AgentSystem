@@ -13,6 +13,7 @@
 // Output (stdout): {"cost_usd": N, "in_tok": N, "out_tok": N, "models": {...}, "unknown_models": [...]}
 
 import { existsSync, readFileSync } from 'node:fs';
+import { isMainModule } from './is-main.js';
 
 // USD per 1M tokens. Cache write/read prices follow Anthropic's standard multipliers
 // of the base input price (5m write = 1.25x, 1h write = 2x, read = 0.1x) — confirmed
@@ -120,8 +121,7 @@ export function computeSessionCost(transcriptPath, { now = new Date() } = {}) {
   return { ok: true, ...priced };
 }
 
-const isMain = process.argv[1] && process.argv[1].endsWith('session-cost-compute.js');
-if (isMain) {
+function main() {
   const transcriptPath = process.argv[2];
   const result = computeSessionCost(transcriptPath);
   if (!result.ok) {
@@ -133,3 +133,5 @@ if (isMain) {
   }
   console.log(JSON.stringify(result));
 }
+
+if (isMainModule(import.meta.url)) main();

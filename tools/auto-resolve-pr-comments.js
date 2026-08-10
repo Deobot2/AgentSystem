@@ -9,6 +9,7 @@
 // Usage: node tools/auto-resolve-pr-comments.js --pr=<number>
 
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 function ghJson(args) {
   try {
@@ -89,7 +90,9 @@ async function main() {
   }
 }
 
-main().catch(e => {
-  console.error(`auto-resolve: unexpected error: ${e.message}`);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  main().catch(e => {
+    console.error(`auto-resolve: unexpected error: ${e.message}`);
+    process.exit(1);
+  });
+}

@@ -13,6 +13,7 @@
 //   2 — Usage error or gh CLI failure
 
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 function ghJson(args) {
   try {
@@ -146,10 +147,7 @@ export async function checkPr(prArg) {
   return results;
 }
 
-const isMain = process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('pr-guard.js');
-
-if (isMain) {
+function main() {
   const arg = process.argv[2];
   if (!arg || arg === '--help') {
     console.log('Usage: node tools/pr-guard.js <pr-number|pr-url>');
@@ -173,3 +171,5 @@ if (isMain) {
     process.exit(2);
   });
 }
+
+if (isMainModule(import.meta.url)) main();

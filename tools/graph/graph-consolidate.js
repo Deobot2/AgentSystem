@@ -34,7 +34,9 @@ import {
   computeSalience,
   agentMemoryRoot,
 } from './graph-lib.js';
+import { isMainModule } from '../is-main.js';
 
+function main() {
 const args = process.argv.slice(2);
 const flags = {};
 const positional = [];
@@ -258,3 +260,6 @@ console.log(`  Outcomes scanned:     ${stats.outcomesFound}`);
 console.log(`  Patterns distilled:   ${stats.patternsDistilled}`);
 console.log(`  Anti-patterns found:  ${stats.antiPatternsFlagged}`);
 console.log(`  Stale edges logged:   ${stats.edgesPruned}`);
+}
+
+if (isMainModule(import.meta.url)) main();

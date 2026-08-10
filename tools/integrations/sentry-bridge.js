@@ -2,6 +2,11 @@
 
 const fs = require('fs');
 const { execSync } = require('child_process');
+// This file is CommonJS (require/module.exports) despite the repo-wide "type": "module" in
+// package.json — Node throws before this line is even reached when run, so the CJS-native
+// `require.main === module` guard below (not tools/is-main.js, which is import.meta.url-based
+// ESM only) is what actually applies once that separate, pre-existing bug is fixed. Guard added
+// for structural consistency with #374; not a claim this file currently runs.
 
 const SECURITY_KEYWORDS = [
   'auth', 'token', 'secret', 'permission', 'csrf',
@@ -155,7 +160,9 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('[sentry] Unexpected error:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[sentry] Unexpected error:', err.message);
+    process.exit(1);
+  });
+}

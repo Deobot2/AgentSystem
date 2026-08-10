@@ -7,7 +7,9 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { emptyGraph, readGraph, writeGraph, addNode, serializeFrontmatter, agentMemoryRoot } from './graph-lib.js';
+import { isMainModule } from '../is-main.js';
 
+function main() {
 const brainDir = join(agentMemoryRoot(), 'nexus', 'agent-brain');
 const nodesDir = join(brainDir, 'nodes');
 const graphPath = join(brainDir, 'graph.json');
@@ -50,3 +52,6 @@ const indexContent = `# Agent Brain Index — Global\n\nInitialized: ${today}\nN
 
 writeFileSync(join(brainDir, 'INDEX.md'), indexContent, 'utf8');
 console.log(`agent-brain-init: ${nodeCount} nodes → ${brainDir}`);
+}
+
+if (isMainModule(import.meta.url)) main();

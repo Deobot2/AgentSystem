@@ -11,6 +11,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { isMainModule } from './is-main.js';
 
 const NEXUS_DIR = path.join(process.env.USERPROFILE || process.env.HOME, 'agent-memory', 'nexus');
 
@@ -43,22 +44,26 @@ function cleanGraph(graphPath, nodesToRemove) {
   }
 }
 
-console.log('🧹 Cleaning graph.json files...\n');
+function main() {
+  console.log('🧹 Cleaning graph.json files...\n');
 
-nodesToDelete.forEach(({ brain, nodes }) => {
-  let graphPath;
-  if (brain === 'personal-brain') {
-    graphPath = path.join(NEXUS_DIR, 'personal-brain', 'graph.json');
-  } else if (brain === 'agent-brain') {
-    graphPath = path.join(NEXUS_DIR, 'agent-brain', 'graph.json');
-  } else {
-    const [base, agent] = brain.split('/');
-    graphPath = path.join(NEXUS_DIR, base, agent, 'graph.json');
-  }
+  nodesToDelete.forEach(({ brain, nodes }) => {
+    let graphPath;
+    if (brain === 'personal-brain') {
+      graphPath = path.join(NEXUS_DIR, 'personal-brain', 'graph.json');
+    } else if (brain === 'agent-brain') {
+      graphPath = path.join(NEXUS_DIR, 'agent-brain', 'graph.json');
+    } else {
+      const [base, agent] = brain.split('/');
+      graphPath = path.join(NEXUS_DIR, base, agent, 'graph.json');
+    }
 
-  if (fs.existsSync(graphPath)) {
-    cleanGraph(graphPath, nodes);
-  }
-});
+    if (fs.existsSync(graphPath)) {
+      cleanGraph(graphPath, nodes);
+    }
+  });
 
-console.log('\n✅ Done!');
+  console.log('\n✅ Done!');
+}
+
+if (isMainModule(import.meta.url)) main();

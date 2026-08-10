@@ -23,9 +23,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
+function main() {
 const args = process.argv.slice(2);
 const opt = {
   status: false, pullOnly: false, ignoreMarkers: false,
@@ -221,3 +223,6 @@ if (outgoing === '0') { log('up to date, nothing to push'); process.exit(0); }
 
 git(['push', '--quiet', 'origin', branch]);
 log(`pushed ${outgoing} commit(s) to origin/${branch}`);
+}
+
+if (isMainModule(import.meta.url)) main();

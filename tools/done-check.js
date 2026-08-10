@@ -29,6 +29,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main.js';
 
 const RUN_LOG_DIR = path.join(os.homedir(), 'agent-memory', 'nexus', 'run-log');
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -120,8 +121,7 @@ export function annotateFile(file, checkers = DEFAULT_CHECKERS) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('done-check.js');
-if (isMain) {
+function main() {
   const args = process.argv.slice(2);
   let files;
   if (args.includes('--all')) {
@@ -148,3 +148,5 @@ if (isMain) {
   }
   process.exit(bad > 0 ? 2 : 0);
 }
+
+if (isMainModule(import.meta.url)) main();

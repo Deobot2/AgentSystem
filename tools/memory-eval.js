@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GRAPH_QUERY = join(__dirname, 'graph', 'graph-query.js');
@@ -153,8 +154,7 @@ export function feedbackReport(logPath = FEEDBACK_LOG) {
   return { total, used, rate: total ? used / total : null, byBrain };
 }
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('memory-eval.js');
-if (isMain) {
+function main() {
   if (process.argv.includes('--report')) {
     const r = feedbackReport();
     console.log(`injection feedback: ${r.used}/${r.total} injected nodes used` +
@@ -174,3 +174,5 @@ if (isMain) {
   console.log(`recall@1=${recallAt1.toFixed(2)} recall@3=${recallAt3.toFixed(2)}`);
   process.exit(recallAt3 === 1 ? 0 : 1);
 }
+
+if (isMainModule(import.meta.url)) main();
