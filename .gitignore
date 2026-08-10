@@ -11,6 +11,7 @@ nexus/
 HANDOFF.md
 .claudedaemon
 .worktrees/
+logs/
 
 # Personal life-OS skills — kept private, never published
 /skills/daily-briefing/
