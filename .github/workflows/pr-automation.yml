@@ -19,17 +19,11 @@ permissions:
 jobs:
   pr-opened:
     if: github.event_name == 'pull_request'
-    name: Autolink + assign PR
+    name: Autolink PR
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Assign PR to Zene8
-        run: gh pr edit "${PR_NUMBER}" --repo "${REPO}" --add-assignee Zene8
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-
       - name: Extract linked issue number from head branch
         id: linked
         run: |
@@ -108,16 +102,3 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         continue-on-error: true
-
-  issue-opened:
-    if: github.event_name == 'issues'
-    name: Assign issue to Zene8
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Assign issue to Zene8
-        run: gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" --add-assignee Zene8
-        env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
