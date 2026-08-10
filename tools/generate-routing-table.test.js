@@ -62,3 +62,35 @@ test('generate: reads real config/routing.yml and writes rows into a jarvis.md f
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- CRLF regression: jarvis.md lives under .agents/**, which .gitattributes does NOT pin to
+// eol=lf, so on Windows (core.autocrlf=true) it is checked out CRLF. spliceTable used to emit LF
+// unconditionally, making `changed` true on every run: `--check` said "OUT OF DATE" forever and a
+// write produced a mixed-ending file. These fail against the pre-fix code.
+
+test('spliceTable: preserves CRLF endings in a CRLF file', () => {
+  const content = `  | Task signal | Route to | Command |\r\n  |---|---|---|\r\n\r\nNote: end`;
+  const updated = spliceTable(content, 'row-a\nrow-b');
+  assert.ok(!/(?<!\r)\n/.test(updated), 'no bare LF may survive in a CRLF file');
+  assert.ok(updated.includes('row-a\r\nrow-b'));
+});
+
+test('spliceTable: preserves LF endings in an LF file', () => {
+  const content = `  | Task signal | Route to | Command |\n  |---|---|---|\n\nNote: end`;
+  const updated = spliceTable(content, 'row-a\nrow-b');
+  assert.ok(!updated.includes('\r'), 'no CR may be introduced into an LF file');
+});
+
+test('generate: --check reports no change for an already-current CRLF jarvis.md', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'routing-table-crlf-'));
+  const jarvisPath = join(dir, 'jarvis.md');
+  writeFileSync(jarvisPath, '  | Task signal | Route to | Command |\r\n  |---|---|---|\r\n\r\nNote: end', 'utf8');
+  try {
+    generate(undefined, jarvisPath);                                  // first run writes CRLF rows
+    const second = generate(undefined, jarvisPath, { dryRun: true }); // second must be a no-op
+    assert.equal(second.changed, false, '--check must not report drift on an up-to-date CRLF file');
+    assert.ok(!/(?<!\r)\n/.test(readFileSync(jarvisPath, 'utf8')), 'written file must stay pure CRLF');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

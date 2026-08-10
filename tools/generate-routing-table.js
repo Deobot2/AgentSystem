@@ -36,27 +36,40 @@ export function renderTable(rules) {
   return rules.map(renderRow).join('\n');
 }
 
+// Pure: the dominant line ending of `content`. renderTable() always emits LF, but jarvis.md is
+// checked out CRLF on Windows (`core.autocrlf=true`, and `.agents/**` is NOT pinned to `eol=lf`
+// in .gitattributes — only tools/, hooks/, .github/workflows/, *.sh, *.json, *.yml are). Splicing
+// LF rows into a CRLF file left `updated !== content` on every run even when the rules were
+// identical, so `--check` reported "OUT OF DATE" forever on any Windows host and an actual write
+// produced a mixed-ending file that git normalized back to a no-op diff. Match the target file's
+// endings instead of hard-coding LF.
+export function detectEol(content) {
+  return content.includes('\r\n') ? '\r\n' : '\n';
+}
+
 // Pure: splice `tableBody` between START_MARKER/END_MARKER in `content`. If the markers are
 // already present, replaces everything between them. If absent, inserts a fresh marker pair
 // immediately after the table's header separator row (the "|---|---|---|" line following the
 // "Task signal" header) — self-healing so a hand-edited jarvis.md doesn't need manual marker
 // placement before the first regeneration.
 export function spliceTable(content, tableBody) {
+  const eol = detectEol(content);
+  const body = tableBody.split(/\r?\n/).join(eol);
   const startIdx = content.indexOf(START_MARKER);
   const endIdx = content.indexOf(END_MARKER);
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    return content.slice(0, startIdx) + START_MARKER + '\n' + tableBody + '\n' + content.slice(endIdx);
+    return content.slice(0, startIdx) + START_MARKER + eol + body + eol + content.slice(endIdx);
   }
 
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   const headerIdx = lines.findIndex(l => /Task signal/.test(l));
   if (headerIdx === -1) {
     throw new Error('generate-routing-table: could not find routing table header ("Task signal") in jarvis.md');
   }
   const sepIdx = headerIdx + 1; // separator row "|---|---|---|" immediately follows the header
-  const before = lines.slice(0, sepIdx + 1).join('\n');
-  const after = lines.slice(sepIdx + 1).join('\n');
-  return `${before}\n${START_MARKER}\n${tableBody}\n${END_MARKER}\n${after}`;
+  const before = lines.slice(0, sepIdx + 1).join(eol);
+  const after = lines.slice(sepIdx + 1).join(eol);
+  return `${before}${eol}${START_MARKER}${eol}${body}${eol}${END_MARKER}${eol}${after}`;
 }
 
 // Guard against #154: an unrecognized flag (typo'd or new) being silently swallowed as a
