@@ -183,6 +183,15 @@ function extractEpisodicFacts(transcriptPath) {
 // the tail-offset optimization above exists for episodic extraction, but the first user
 // prompt may have scrolled out of the "new bytes" window by the time Stop fires, so this
 // reads the transcript independently). Returns the raw prompt text, or null if none found.
+//
+// #351: this used to be what logRoutingActual() hashed for the join key, but `Stop` (and
+// `SubagentStop`) fire once per completed turn, not once per session — so on turn 2+ this
+// re-hashes the SAME turn-1 text every time, while memory-router.js's hint record for that
+// turn hashes the CURRENT turn's prompt. The two promptHashes only coincide on a session's
+// first turn, which is why the #351 audit found only 2/241 hint hashes joining to an actual
+// row. Kept here (and still exported/tested) because it is still the right text for anything
+// that wants "what was this session originally about"; routing uses extractLastUserPromptText
+// instead — see below.
 function extractFirstUserPromptText(transcriptPath) {
   try {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
@@ -211,16 +220,52 @@ function extractFirstUserPromptText(transcriptPath) {
   return null;
 }
 
+// #351: find the LAST user-turn's text in the transcript — the prompt that belongs to the
+// turn which just completed and triggered this Stop/SubagentStop event. This is the text
+// memory-router.js hashed for the hint record it wrote at the START of this same turn
+// (UserPromptSubmit fires before the turn runs; Stop fires after), so hashing the same text
+// here is what makes the hint and actual-agent rows share a promptHash and actually join.
+function extractLastUserPromptText(transcriptPath) {
+  try {
+    const raw = fs.readFileSync(transcriptPath, 'utf8');
+    const lines = raw.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i].trim();
+      if (!trimmed) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      const msg = parsed && parsed.message;
+      if (!msg || msg.role !== 'user') continue;
+      const contentArr = Array.isArray(msg.content) ? msg.content : [msg.content];
+      for (const block of contentArr) {
+        const text = typeof block === 'string' ? block :
+          (block && block.type === 'text' ? block.text : '');
+        if (text && text.trim()) return text;
+      }
+    }
+  } catch {
+    // Non-fatal — routing telemetry is best-effort.
+  }
+  return null;
+}
+
 // #124: append the "actual agent used" half of the routing-accuracy telemetry pair to
 // routing-log.jsonl, keyed by the same promptHash memory-router.js used for its hint record.
 // Never throws — telemetry must never affect the episodic write-back it rides alongside.
 function logRoutingActual(facts, transcriptPath) {
   try {
-    const firstPrompt = extractFirstUserPromptText(transcriptPath);
-    if (!firstPrompt) return;
+    // #351: hash the LAST user prompt (the turn that just completed), not the first — see
+    // extractLastUserPromptText's comment for why that's the one memory-router.js's hint
+    // record for this turn actually shares a promptHash with.
+    const lastPrompt = extractLastUserPromptText(transcriptPath);
+    if (!lastPrompt) return;
     logRoutingEvent({
       ts: new Date().toISOString(),
-      promptHash: promptHash(firstPrompt),
+      promptHash: promptHash(lastPrompt),
       agent: (facts && facts.agent) || 'unknown',
     });
   } catch {
@@ -316,5 +361,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  extractEpisodicFacts, extractFirstUserPromptText, logRoutingActual, writeEpisodicNode,
+  extractEpisodicFacts, extractFirstUserPromptText, extractLastUserPromptText,
+  logRoutingActual, writeEpisodicNode,
 };

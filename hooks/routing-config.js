@@ -7,9 +7,27 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
+// #351: the deployed copy of this file lives at ~/.claude/hooks/routing-config.js, where
+// "../config/routing.yml" resolves to ~/.claude/config/routing.yml — a path that has never
+// existed. loadRoutingRules() below catches the ENOENT and returns [] *silently*, which made
+// DOMAIN_RULES permanently empty in production: matchDomain() always returned null, so every
+// hint record ever written carried hint:"none"/agentHint:null (0/264 in the #351 audit).
+// Mirrors the existing candidate-path pattern in hooks/sona-writeback-hook.js's TOOLS lookup —
+// try the repo-relative path first (works for tests and a repo checkout), then the canonical
+// checkout used by every deployed-hook path in this codebase, then an explicit env override.
 function defaultConfigPath() {
-  // hooks/routing-config.js -> ../config/routing.yml
+  const candidates = [
+    process.env.AGENT_ROUTING_CONFIG,
+    path.join(__dirname, '..', 'config', 'routing.yml'),
+    path.join(os.homedir(), 'dev', 'AgentSystem', 'config', 'routing.yml'),
+  ];
+  for (const p of candidates) {
+    if (p && fs.existsSync(p)) return p;
+  }
+  // Nothing found — return the repo-relative guess so the caller's error message (or the
+  // caught-ENOENT-returns-[] fallback below) still names a sensible path.
   return path.join(__dirname, '..', 'config', 'routing.yml');
 }
 

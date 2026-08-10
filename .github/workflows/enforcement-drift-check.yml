@@ -128,6 +128,26 @@ jobs:
             echo "PASSED: actions-watchdog heartbeat is fresh"
           fi
 
+          echo "=== Checking routing telemetry for blind (zero-join) output (#351) ==="
+          # Zero output on a quiet week is fine; --check only fails when the log EXISTS and
+          # has content that parses/joins to nothing — see tools/routing-report.js checkRoutingLog().
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/routing-report.js" --check; then
+            echo "FAILED: routing telemetry is blind (input present but yields nothing)"
+            driftFound=1
+            results="${results}• Routing telemetry blind: routing-log.jsonl has content but 0 parsed records or 0 hint/actual joins (tools/routing-report.js --check)\n"
+          else
+            echo "PASSED: routing telemetry OK"
+          fi
+
+          echo "=== Checking cost telemetry for blind (zero-parse) output (#351) ==="
+          if ! "${{ steps.tools.outputs.node_path }}" "${{ github.workspace }}/tools/session-cost.js" --check; then
+            echo "FAILED: cost telemetry is blind (input present but yields nothing)"
+            driftFound=1
+            results="${results}• Cost telemetry blind: session-log.jsonl has content but 0 parsed rows or 0 rows with a resolvable date (tools/session-cost.js --check)\n"
+          else
+            echo "PASSED: cost telemetry OK"
+          fi
+
           echo "drift_found=$driftFound" >> "$GITHUB_OUTPUT"
 
           # $results holds literal `\n` appended above; printf '%b' expands it into a genuinely

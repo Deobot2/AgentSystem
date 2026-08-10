@@ -42,3 +42,44 @@ test('loadRoutingRules: real config/routing.yml loads and parses without error',
 test('loadRoutingRules: returns [] for a nonexistent path', () => {
   assert.deepEqual(loadRoutingRules('/nonexistent/routing.yml'), []);
 });
+
+// #351: defaultConfigPath() used to return only the repo-relative candidate
+// (__dirname/../config/routing.yml), which resolves to ~/.claude/config/routing.yml — a path
+// that has never existed — when this file runs from its DEPLOYED location ~/.claude/hooks/.
+// loadRoutingRules() swallowed the resulting ENOENT and returned [], so DOMAIN_RULES was
+// permanently empty in production and every hint record carried hint:"none". Fix: search an
+// ordered candidate list (env override, repo-relative, canonical checkout).
+test('defaultConfigPath: prefers AGENT_ROUTING_CONFIG env override when it exists', () => {
+  const real = defaultConfigPath();
+  const prev = process.env.AGENT_ROUTING_CONFIG;
+  process.env.AGENT_ROUTING_CONFIG = real;
+  try {
+    assert.equal(defaultConfigPath(), real);
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_ROUTING_CONFIG;
+    else process.env.AGENT_ROUTING_CONFIG = prev;
+  }
+});
+
+test('defaultConfigPath: ignores an env override pointing at a nonexistent file', () => {
+  const prev = process.env.AGENT_ROUTING_CONFIG;
+  process.env.AGENT_ROUTING_CONFIG = '/nonexistent/routing-override.yml';
+  try {
+    const resolved = defaultConfigPath();
+    assert.notEqual(resolved, '/nonexistent/routing-override.yml');
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_ROUTING_CONFIG;
+    else process.env.AGENT_ROUTING_CONFIG = prev;
+  }
+});
+
+test('defaultConfigPath: falls back to a real, existing config/routing.yml with no env override', () => {
+  const prev = process.env.AGENT_ROUTING_CONFIG;
+  delete process.env.AGENT_ROUTING_CONFIG;
+  try {
+    const resolved = defaultConfigPath();
+    assert.ok(require('fs').existsSync(resolved), `expected ${resolved} to exist`);
+  } finally {
+    if (prev !== undefined) process.env.AGENT_ROUTING_CONFIG = prev;
+  }
+});

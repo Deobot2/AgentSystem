@@ -7,7 +7,7 @@
 // Usage:
 //   node tools/routing-report.js [--log=<path>]
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -126,6 +126,37 @@ export function formatReport(branches, misroutes) {
   return lines.join('\n');
 }
 
+// Pure: #351 --check predicate. A quiet week (no log file) is NOT a failure. A log that EXISTS
+// with content but yields zero PARSED records, or parses but joins to zero rows (the "241/97
+// unique hashes, only 2 overlap" failure from the #351 audit — hint records and actual records
+// minted with different promptHashes for the same turn) is the blind-routing-telemetry failure
+// this exists to catch.
+export function checkRoutingLog(logPath) {
+  const path = logPath || ROUTING_LOG_PATH;
+  if (!existsSync(path)) {
+    return { blind: false, reason: null, totalRecords: 0, joinedRecords: 0 };
+  }
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return { blind: false, reason: null, totalRecords: 0, joinedRecords: 0 };
+  }
+  const lines = raw.split('\n').filter(l => l.trim());
+  if (lines.length === 0) {
+    return { blind: false, reason: null, totalRecords: 0, joinedRecords: 0 };
+  }
+  const records = loadRecords(path);
+  if (records.length === 0) {
+    return { blind: true, reason: `${lines.length} line(s) present but 0 parsed as valid JSON`, totalRecords: 0, joinedRecords: 0 };
+  }
+  const joined = joinRecords(records);
+  if (joined.length === 0) {
+    return { blind: true, reason: `${records.length} record(s) parsed but 0 hint/actual pairs share a promptHash`, totalRecords: records.length, joinedRecords: 0 };
+  }
+  return { blind: false, reason: null, totalRecords: records.length, joinedRecords: joined.length };
+}
+
 function parseArgs(argv) {
   const flags = {};
   for (const a of argv.slice(2)) {
@@ -137,6 +168,18 @@ function parseArgs(argv) {
 
 function main() {
   const flags = parseArgs(process.argv);
+
+  if (flags.check) {
+    const result = checkRoutingLog(flags.log);
+    if (result.blind) {
+      console.error(`routing-report --check: FAILED — ${result.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`routing-report --check: OK — ${result.totalRecords} record(s), ${result.joinedRecords} joined`);
+    return;
+  }
+
   const records = loadRecords(flags.log);
   const joined = joinRecords(records);
   const { branches, misroutes } = computeStats(joined);

@@ -16,9 +16,13 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } fr
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './is-main.js';
 
 const HOME = homedir();
-const SESSION_LOG = join(HOME, 'agent-memory', 'nexus', 'session-log.jsonl');
+// #351 test hook: allow tests to point this at a temp file instead of the real, shared
+// ~/agent-memory/nexus/session-log.jsonl (CLAUDE.md: never write to ~/agent-memory outside
+// documented tools/paths — this override keeps tests off the real file entirely).
+const SESSION_LOG = process.env.AGENT_SESSION_LOG || join(HOME, 'agent-memory', 'nexus', 'session-log.jsonl');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -230,7 +234,16 @@ function loadSessionEntry(sessionId) {
 }
 
 /**
- * Append a one-line summary to session-log.jsonl, deduped by session_id.
+ * Merge a one-line summary into session-log.jsonl, deduped by session_id.
+ *
+ * #351: this used to REPLACE any existing row for `sessionId` with a summary-only object
+ * ({session, timestamp, summary, cwd}). session-end.sh appends the real cost row for the
+ * same session ({ts, session, agent, cost_usd, in_tok, out_tok}) via session-cost-compute.js
+ * moments earlier in the same Stop-hook invocation — so this function ran second and
+ * silently deleted the cost/token fields on every single session, which is why 0/145 rows
+ * in the #351 audit carried cost_usd/in_tok/out_tok. Fix: merge the summary fields onto the
+ * existing row for this session instead of replacing it, so whichever writer ran first is
+ * preserved.
  */
 function appendSessionSummary(sessionId, summary, cwd) {
   ensureDir(SESSION_LOG);
@@ -249,17 +262,21 @@ function appendSessionSummary(sessionId, summary, cwd) {
     }
   }
 
-  // Remove existing entry for this session (dedup)
-  entries = entries.filter(e => e.session !== sessionId);
-
-  // Add new summary entry
-  const logEntry = {
+  const patch = {
     session: sessionId,
     timestamp: new Date().toISOString(),
     summary: summary.slice(0, 200), // Truncate to 200 chars
     cwd: cwd || '',
   };
-  entries.push(logEntry);
+
+  const idx = entries.findIndex(e => e.session === sessionId);
+  if (idx >= 0) {
+    // Merge onto the existing row — preserves ts/cost_usd/in_tok/out_tok/agent if
+    // session-end.sh already wrote them for this session.
+    entries[idx] = { ...entries[idx], ...patch };
+  } else {
+    entries.push(patch);
+  }
 
   // Write back
   writeFileSync(
@@ -328,11 +345,15 @@ for (const arg of args) {
   }
 }
 
-cmdRunHygiene({
-  session: flags.session,
-  cwd: flags.cwd,
-  transcriptPath: flags['transcript-path'],
-}).catch(err => {
-  console.error('[pm-hygiene] error:', err.message);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  cmdRunHygiene({
+    session: flags.session,
+    cwd: flags.cwd,
+    transcriptPath: flags['transcript-path'],
+  }).catch(err => {
+    console.error('[pm-hygiene] error:', err.message);
+    process.exit(1);
+  });
+}
+
+export { appendSessionSummary, SESSION_LOG };

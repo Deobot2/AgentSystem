@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { promptHash } = require('./memory-router.js');
-const { extractFirstUserPromptText, logRoutingActual, extractEpisodicFacts } = require('./sona-writeback-hook.js');
+const { extractFirstUserPromptText, extractLastUserPromptText, logRoutingActual, extractEpisodicFacts } = require('./sona-writeback-hook.js');
 
 function writeTranscript(lines) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sona-writeback-test-'));
@@ -55,6 +55,63 @@ test('extractFirstUserPromptText: tolerates malformed JSON lines', () => {
   const p = path.join(dir, 'transcript.jsonl');
   fs.writeFileSync(p, 'not-json\n' + JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'ok prompt' }] } }) + '\n', 'utf8');
   assert.equal(extractFirstUserPromptText(p), 'ok prompt');
+});
+
+// #351: Stop/SubagentStop fire once per completed turn, not once per session — the "actual"
+// record must hash the LAST user turn (the one that just finished), not the first, or it can
+// never join to memory-router.js's hint record for turns after the first.
+test('extractLastUserPromptText: returns the LAST user-turn text, not the first', () => {
+  const p = writeTranscript([
+    { message: { role: 'user', content: [{ type: 'text', text: 'first turn prompt' }] } },
+    { message: { role: 'assistant', content: [{ type: 'text', text: 'DONE: did turn 1' }] } },
+    { message: { role: 'user', content: [{ type: 'text', text: 'second turn prompt' }] } },
+    { message: { role: 'assistant', content: [{ type: 'text', text: 'DONE: did turn 2' }] } },
+  ]);
+  assert.equal(extractLastUserPromptText(p), 'second turn prompt');
+});
+
+test('extractLastUserPromptText: handles string content (not array)', () => {
+  const p = writeTranscript([
+    { message: { role: 'user', content: 'turn one' } },
+    { message: { role: 'user', content: 'turn two' } },
+  ]);
+  assert.equal(extractLastUserPromptText(p), 'turn two');
+});
+
+test('extractLastUserPromptText: skips a trailing user turn with only whitespace text', () => {
+  const p = writeTranscript([
+    { message: { role: 'user', content: [{ type: 'text', text: 'real last prompt' }] } },
+    { message: { role: 'user', content: [{ type: 'text', text: '   ' }] } },
+  ]);
+  assert.equal(extractLastUserPromptText(p), 'real last prompt');
+});
+
+test('extractLastUserPromptText: returns null when no user turn exists', () => {
+  const p = writeTranscript([{ message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } }]);
+  assert.equal(extractLastUserPromptText(p), null);
+});
+
+test('extractLastUserPromptText: returns null on nonexistent file (never throws)', () => {
+  assert.equal(extractLastUserPromptText('/nonexistent/transcript.jsonl'), null);
+});
+
+test('logRoutingActual: hashes the LAST user turn so multi-turn sessions join correctly (#351)', () => {
+  const lastPrompt = `deploy this last prompt ${Date.now()}-${Math.random()}`;
+  const p = writeTranscript([
+    { message: { role: 'user', content: [{ type: 'text', text: 'irrelevant first turn' }] } },
+    { message: { role: 'assistant', content: [{ type: 'text', text: 'DONE: turn 1' }] } },
+    { message: { role: 'user', content: [{ type: 'text', text: lastPrompt }] } },
+  ]);
+  const expectedHash = promptHash(lastPrompt);
+
+  assert.doesNotThrow(() => logRoutingActual({ agent: 'Friday' }, p));
+
+  const realLog = path.join(os.homedir(), 'agent-memory', 'nexus', 'routing-log.jsonl');
+  const raw = fs.readFileSync(realLog, 'utf8');
+  const lines = raw.split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const match = lines.find(l => l.promptHash === expectedHash);
+  assert.ok(match, 'expected a routing-log.jsonl record keyed by the LAST turn\'s promptHash');
+  assert.equal(match.agent, 'Friday');
 });
 
 test('logRoutingActual: writes a record to routing-log.jsonl keyed by the shared promptHash', () => {
