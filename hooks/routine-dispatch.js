@@ -15,11 +15,21 @@ const os = require('node:os');
 
 // Deployed copies live in ~/.claude/hooks where "../tools" does not exist — every
 // candidate is existence-checked so the hook works from both locations (2026-07-12 audit).
-const TOOLS = [
+// #372: resolveTools is exported so a regression test can prove BOTH halves of this
+// tradeoff — that it resolves under normal conditions, and that when every candidate
+// lacks the marker file it returns undefined (the exact silent-no-op path every call
+// site below swallows via a bare try/catch).
+function resolveTools(candidates, markerFile) {
+  return candidates.find((p) => { try { return p && fs.existsSync(path.join(p, markerFile)); } catch { return false; } });
+}
+
+const TOOLS = resolveTools([
   process.env.AGENT_TOOLS_ROOT,
   path.resolve(__dirname, '..', 'tools'),
   path.join(os.homedir(), 'dev', 'AgentSystem', 'tools'),
-].find((p) => { try { return p && fs.existsSync(path.join(p, 'auto-resolve-pr-comments.js')); } catch { return false; } });
+], 'auto-resolve-pr-comments.js');
+
+module.exports = { resolveTools };
 
 // NOTE: dispatchRoutines() in tools/routines.js is NOT wired into this hook's dispatch path below —
 // this file hardcodes its own inline pr_create detection. dispatchRoutines() exists for the

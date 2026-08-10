@@ -24,7 +24,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { readGraph, writeGraph, emptyGraph, addNode, addEdge, parseFrontmatter, agentMemoryRoot } from './graph/graph-lib.js';
+import { readGraph, writeGraph, emptyGraph, addNode, addEdge, parseFrontmatter, agentMemoryRoot, isBrainDir } from './graph/graph-lib.js';
 import { parseFlagsOrExit } from './cli-args.js';
 import { isMainModule } from './is-main.js';
 
@@ -116,7 +116,11 @@ export function discoverBrains(root) {
   const agentBrainRoot = join(root, 'agent-brain');
   if (existsSync(agentBrainRoot)) {
     for (const entry of readdirSync(agentBrainRoot, { withFileTypes: true })) {
-      if (entry.isDirectory()) found.push(join(agentBrainRoot, entry.name));
+      // #375: this used to push every directory unconditionally, which walked into
+      // agent-brain/nodes/ (that root brain's OWN nodes folder, not a per-agent brain) and
+      // scaffolded a bogus {"brain":"unknown","nodes":[],"edges":[]} graph.json there.
+      const candidate = join(agentBrainRoot, entry.name);
+      if (entry.isDirectory() && isBrainDir(candidate)) found.push(candidate);
     }
   }
   return found.sort();

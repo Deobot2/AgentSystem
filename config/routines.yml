@@ -130,7 +130,7 @@
   task_name: AgentSystem-WeeklyBrainConsolidation
   enforce: hard
   enabled: true
-  action: "Weekly brain review: run node ~/dev/AgentSystem/tools/memory-maintenance.js --reflect — full sleep cycle (split/reconsolidate/decay/stale-prune/consolidate/seed + reflection). Supersedes the old personal-brain-split.js + memory-stale.js two-step, which memory-maintenance.js now wraps."
+  action: "Weekly brain review: run node ~/dev/AgentSystem/tools/memory-maintenance.js --reflect — full sleep cycle (split/reconsolidate/decay/stale-prune/consolidate/seed + reflection). Supersedes the old personal-brain-split.js + memory-stale.js two-step, which memory-maintenance.js now wraps. Same job also runs tools/backfill-salience.js (#372-adjacent audit) to stamp salience on personal-brain nodes predating the live brain-remember.js write path; idempotent, skip-if-stamped."
 
 - id: weekly-memory-decay
   description: Sunday visit_count decay across every initialised brain

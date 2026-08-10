@@ -9,6 +9,7 @@ import {
   writeGraph,
   decayedVisitScore,
   recomputeComposite,
+  isBrainDir,
 } from './graph/graph-lib.js';
 import { isMainModule } from './is-main.js';
 
@@ -43,10 +44,17 @@ path that never exists on any host. --all exists so callers stop guessing.
   `);
 }
 
-// A brain is any directory under nexus/ holding a graph.json, plus the same one level down
-// inside agent-brain/ (which is a container of per-agent brains, not a brain itself).
-// Discovery rather than a hardcoded list because the hardcoded list is what was wrong: the CI job
-// named `agentsystem`, a slug that cannot exist here, and silently decayed nothing for months.
+// A brain is any directory under nexus/ that passes the shared isBrainDir() positive-evidence
+// check, plus the same one level down inside agent-brain/ (which is a container of per-agent
+// brains, not a brain itself). Discovery rather than a hardcoded list because the hardcoded list
+// is what was wrong: the CI job named `agentsystem`, a slug that cannot exist here, and silently
+// decayed nothing for months.
+//
+// #375: this used to carry its own inline dot-directory-skip + graph.json-existence check,
+// duplicating (and drifting from) the same rule in graph-reindex.js. `.obsidian/graph.json` is an
+// Obsidian graph-VIEW settings file, not a brain -- filename-only discovery adopted it as brain #1
+// and killed the whole weekly job with `TypeError: graph.nodes is not iterable`. Delegating to the
+// shared isBrainDir() means graph-reindex.js and this tool inherit one fix, not two.
 function discoverBrains(nexusDir) {
   if (!existsSync(nexusDir)) return [];
   const found = [];
@@ -56,20 +64,15 @@ function discoverBrains(nexusDir) {
     .sort();
 
   for (const name of entries) {
-    // Dot-directories are tool state, never brains. `~/agent-memory` is an Obsidian vault, and
-    // Obsidian keeps its graph-VIEW settings at `.obsidian/graph.json` -- the same filename a
-    // brain uses, with completely unrelated content. Discovery keyed on the filename alone, so
-    // `.obsidian` sorted first, was adopted as brain #1, and killed the whole weekly job with
-    // `TypeError: graph.nodes is not iterable` before one real brain was touched.
-    if (name.startsWith('.')) continue;
-    if (existsSync(join(nexusDir, name, 'graph.json'))) found.push(name);
+    const candidate = join(nexusDir, name);
+    if (isBrainDir(candidate)) found.push(name);
     if (name !== 'agent-brain') continue;
-    const agents = readdirSync(join(nexusDir, name), { withFileTypes: true })
+    const agents = readdirSync(candidate, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
     for (const agent of agents) {
-      if (existsSync(join(nexusDir, name, agent, 'graph.json'))) found.push(`${name}/${agent}`);
+      if (isBrainDir(join(candidate, agent))) found.push(`${name}/${agent}`);
     }
   }
   return found;

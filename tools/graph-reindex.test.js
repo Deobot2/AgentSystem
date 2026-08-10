@@ -109,12 +109,36 @@ test('discoverBrains sweeps personal-brain and every agent-brain/<agent>', () =>
   const root = mkdtempSync(join(tmpdir(), 'graph-reindex-root-'));
   try {
     mkdirSync(join(root, 'personal-brain'), { recursive: true });
-    mkdirSync(join(root, 'agent-brain', 'jarvis'), { recursive: true });
-    mkdirSync(join(root, 'agent-brain', 'friday'), { recursive: true });
+    // #375: a per-agent brain is only real evidence with a nodes/ dir (or a graph.json carrying
+    // a non-"unknown" brain field) — an empty directory is no longer enumerated.
+    mkdirSync(join(root, 'agent-brain', 'jarvis', 'nodes'), { recursive: true });
+    mkdirSync(join(root, 'agent-brain', 'friday', 'nodes'), { recursive: true });
 
     const found = discoverBrains(root);
     assert.deepEqual(found.sort(), [
       join(root, 'agent-brain', 'friday'),
+      join(root, 'agent-brain', 'jarvis'),
+      join(root, 'personal-brain'),
+    ].sort());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('discoverBrains #375: does not enumerate dotfile dirs or a bare nodes/ dir as brains', () => {
+  const root = mkdtempSync(join(tmpdir(), 'graph-reindex-root-'));
+  try {
+    mkdirSync(join(root, 'personal-brain'), { recursive: true });
+    // Obsidian keeps graph-VIEW settings at .obsidian/graph.json — same filename a brain uses,
+    // unrelated content. Must never be adopted as a brain.
+    mkdirSync(join(root, '.obsidian'), { recursive: true });
+    writeFileSync(join(root, '.obsidian', 'graph.json'), JSON.stringify({ nodes: [], edges: [] }), 'utf8');
+    // agent-brain/nodes/ is the root brain's OWN nodes folder, not a per-agent brain.
+    mkdirSync(join(root, 'agent-brain', 'nodes'), { recursive: true });
+    mkdirSync(join(root, 'agent-brain', 'jarvis', 'nodes'), { recursive: true });
+
+    const found = discoverBrains(root);
+    assert.deepEqual(found.sort(), [
       join(root, 'agent-brain', 'jarvis'),
       join(root, 'personal-brain'),
     ].sort());

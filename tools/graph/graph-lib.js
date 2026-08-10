@@ -1,6 +1,6 @@
 // graph-lib.js — core graph library, zero npm dependencies
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 // Cross-CLI shared memory root. Neutral path — readable by Claude, Gemini, Copilot, any CLI.
@@ -26,6 +26,33 @@ export function resolveRepoBrainDir(repo) {
 export function resolveRepoGraphPath(repo) {
   const dir = resolveRepoBrainDir(repo);
   return dir ? join(dir, 'graph.json') : null;
+}
+
+// #375: a directory under nexus/ is a brain only on POSITIVE evidence — it holds a nodes/
+// subdirectory, and/or an existing graph.json whose `brain` field is a real (non-"unknown")
+// string. A dotfile directory (`.obsidian`, `.git`, ...) is never a brain: Obsidian keeps its
+// own graph-VIEW settings at `.obsidian/graph.json`, same filename, unrelated content, and that
+// alone once got `.obsidian` adopted as "brain #1" and crashed a decay pass with
+// `TypeError: graph.nodes is not iterable` before a single real brain was touched. A directory
+// literally *named* `nodes` is never a brain either — it is a brain's own nodes/ folder, and a
+// sweep that walks one level too far (agent-brain/nodes/ instead of agent-brain/<agent>/) treats
+// that folder-of-node-files as if it were a per-agent brain and scaffolds
+// `{"brain":"unknown","nodes":[],"edges":[]}` into it. Shared here so every sweeping tool
+// (graph-reindex.js, memory-decay.js, ...) inherits one definition instead of drifting per tool.
+export function isBrainDir(dirPath) {
+  if (!existsSync(dirPath)) return false;
+  const base = basename(dirPath);
+  if (base.startsWith('.')) return false;
+  if (base === 'nodes') return false;
+  if (existsSync(join(dirPath, 'nodes'))) return true;
+  const graphPath = join(dirPath, 'graph.json');
+  if (!existsSync(graphPath)) return false;
+  try {
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    return !!(graph && typeof graph.brain === 'string' && graph.brain && graph.brain !== 'unknown');
+  } catch {
+    return false;
+  }
 }
 
 // --- Fix 2: Context-adaptive weight profiles ---

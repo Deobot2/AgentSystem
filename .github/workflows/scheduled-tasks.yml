@@ -396,6 +396,15 @@ jobs:
         shell: bash
         run: |
           node "${{ github.workspace }}/tools/memory-maintenance.js" --reflect
+      # #372-adjacent audit: backfill-salience.js was written, idempotent, and had zero callers —
+      # the live write path (brain-remember.js) stamps salience only on NEW nodes, so nodes
+      # written before that path existed never get one. Wiring here (not a new routine/cron
+      # entry — same job, same schedule) rather than deleting: skip-if-stamped makes repeat runs
+      # a no-op, so it costs nothing on weeks with nothing to backfill.
+      - name: Backfill salience on personal-brain nodes missing it
+        shell: bash
+        run: |
+          node "${{ github.workspace }}/tools/backfill-salience.js"
 
   # memory-decay.js reads/writes ~/agent-memory/nexus/* brains directly — local machine state.
   #

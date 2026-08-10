@@ -68,7 +68,12 @@ function seedBrain(memoryRoot, brain) {
   const dir = join(memoryRoot, 'nexus', brain);
   mkdirSync(dir, { recursive: true });
   const old = new Date(Date.now() - 500 * 24 * 60 * 60 * 1000).toISOString();
+  // #375: discovery now requires positive evidence via the shared isBrainDir() -- a graph.json
+  // needs a real (non-"unknown") `brain` field, matching what emptyGraph()/writeGraph() always
+  // stamp on a genuine brain. A fixture without one is indistinguishable from stray non-brain
+  // JSON (e.g. an Obsidian settings file) and would no longer be discovered at all.
   writeFileSync(join(dir, 'graph.json'), JSON.stringify({
+    brain,
     nodes: ['a', 'b'],
     edges: [{
       source: 'a',
@@ -169,10 +174,11 @@ test('memory-decay --all: dot-directories are not brains (.obsidian/graph.json i
 test('memory-decay: a graph.json without a nodes array is skipped, not a crash', () => {
   withRoot((memoryRoot) => {
     seedBrain(memoryRoot, 'personal-brain');
-    // Not hidden, so discovery accepts it -- only shape validation can reject this one.
+    // Carries a real `brain` field so isBrainDir's discovery-level check accepts it as a
+    // candidate -- only the deeper shape validation (nodes/edges arrays) can reject this one.
     const bogus = join(memoryRoot, 'nexus', 'notabrain');
     mkdirSync(bogus, { recursive: true });
-    writeFileSync(join(bogus, 'graph.json'), JSON.stringify({ scale: 1, showTags: false }));
+    writeFileSync(join(bogus, 'graph.json'), JSON.stringify({ brain: 'notabrain', scale: 1, showTags: false }));
 
     const stdout = run(memoryRoot, ['--all', '--dry-run']);
     assert.match(stdout, /not a brain graph/i);

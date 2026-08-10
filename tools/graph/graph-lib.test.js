@@ -1,12 +1,78 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   emptyGraph, addNode, addEdge,
   spreadingActivation, updateConfidence,
   decayedVisitScore, enforceEdgeCap, recomputeComposite,
   parseFrontmatter, needProbabilityScore,
   effectiveImportance, nodeAccessSignal,
+  isBrainDir,
 } from './graph-lib.js';
+
+// #375: a directory under nexus/ is a brain only on positive evidence -- a nodes/ subdirectory,
+// or a graph.json with a real (non-"unknown") brain field. Dotfile dirs (.obsidian, an Obsidian
+// vault's own graph-VIEW settings file) and a bare directory literally named "nodes" are never
+// brains, no matter what they contain.
+test('isBrainDir: true for a dir with a nodes/ subdirectory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isbraindir-'));
+  try {
+    const brain = join(root, 'personal-brain');
+    mkdirSync(join(brain, 'nodes'), { recursive: true });
+    assert.equal(isBrainDir(brain), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isBrainDir: true for a dir with a graph.json carrying a real brain field', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isbraindir-'));
+  try {
+    const brain = join(root, 'agentsystem');
+    mkdirSync(brain, { recursive: true });
+    writeFileSync(join(brain, 'graph.json'), JSON.stringify({ brain: 'agentsystem', nodes: [], edges: [] }), 'utf8');
+    assert.equal(isBrainDir(brain), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isBrainDir: false for a dotfile dir even with a graph.json inside (.obsidian)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isbraindir-'));
+  try {
+    const obsidian = join(root, '.obsidian');
+    mkdirSync(obsidian, { recursive: true });
+    writeFileSync(join(obsidian, 'graph.json'), JSON.stringify({ nodes: [], edges: [] }), 'utf8');
+    assert.equal(isBrainDir(obsidian), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isBrainDir: false for a bare directory literally named nodes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isbraindir-'));
+  try {
+    const nested = join(root, 'agent-brain', 'nodes');
+    mkdirSync(nested, { recursive: true });
+    assert.equal(isBrainDir(nested), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isBrainDir: false for a graph.json whose brain field is "unknown" or missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isbraindir-'));
+  try {
+    const dir = join(root, 'scratch');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'graph.json'), JSON.stringify({ brain: 'unknown', nodes: [], edges: [] }), 'utf8');
+    assert.equal(isBrainDir(dir), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('needProbabilityScore: importance 0 is neutral, higher importance boosts', () => {
   assert.strictEqual(needProbabilityScore(0.4, 0), 0.4, 'importance 0 leaves score unchanged');

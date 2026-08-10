@@ -10,11 +10,21 @@ const fs = require('node:fs');
 // Deployed copies live in ~/.claude/hooks where "../tools" does not exist — every
 // candidate is existence-checked so the hook works from both the repo and the
 // deployed location (root cause of the silent SessionEnd capture outage, 2026-07-12).
-const TOOLS = [
+// #372: resolveTools is exported so a regression test can prove BOTH halves of this
+// tradeoff — that it resolves under normal conditions, and that when every candidate
+// lacks the marker file it returns undefined (the exact silent-no-op path every call
+// site below swallows via a bare try/catch).
+function resolveTools(candidates, markerFile) {
+  return candidates.find((p) => { try { return p && fs.existsSync(path.join(p, markerFile)); } catch { return false; } });
+}
+
+const TOOLS = resolveTools([
   process.env.AGENT_TOOLS_ROOT,
   path.resolve(__dirname, '..', 'tools'),
   path.join(require('node:os').homedir(), 'dev', 'AgentSystem', 'tools'),
-].find((p) => { try { return p && fs.existsSync(path.join(p, 'memory-capture.js')); } catch { return false; } });
+], 'memory-capture.js');
+
+module.exports = { resolveTools };
 
 // #168: auto-capture.log was stale since Jul 3 — root cause: this hook spawned the
 // capture child with stdio:'ignore', so its stdout/stderr (the "extracted N, wrote M
