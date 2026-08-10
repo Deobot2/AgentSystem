@@ -192,8 +192,34 @@ jobs:
             } >> "$RUNNER_TEMP/pr-diff.txt"
           fi
 
-      - name: Run Sam security audit
+      # #337: skip the model entirely when this PR's merge-base diff is byte-identical to one
+      # already given an APPROVED verdict — a rebase, a force-push that only reorders commits, or
+      # a re-run triggered by something other than a content change all hash the same. Keyed on
+      # (PR number, base ref, diff hash) — never the SHA — and only ever reuses an APPROVED prior
+      # verdict; see tools/sam-audit-cache.js for the fail-toward-auditing rules this leans on.
+      - name: Check diff-hash cache
         if: steps.precheck.outputs.skip != 'true'
+        id: cache
+        shell: bash
+        # Emit plain string outputs (`reuse`, `reason`) rather than a JSON blob parsed later via
+        # `fromJSON()` in an `if:` condition — GitHub Actions expressions are not guaranteed to
+        # short-circuit `&&`, so a later step's `if:` referencing `fromJSON(steps.cache.outputs...)`
+        # on a run where this step never executed (empty output) would error the whole job instead
+        # of just skipping. Plain string comparisons never have that failure mode.
+        run: |
+          NODE="${{ steps.tools.outputs.node_path }}"
+          RESULT=$("$NODE" "${{ github.workspace }}/tools/sam-audit-cache.js" check \
+            --pr "${{ github.event.pull_request.number }}" \
+            --base-ref "${{ github.base_ref }}" \
+            --diff-file "$RUNNER_TEMP/pr-diff-full.txt")
+          echo "cache check: $RESULT"
+          REUSE=$("$NODE" -e "console.log(JSON.parse(process.argv[1]).reuse === true)" "$RESULT")
+          REASON=$("$NODE" -e "console.log(JSON.parse(process.argv[1]).reason)" "$RESULT")
+          echo "reuse=$REUSE" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Run Sam security audit
+        if: steps.precheck.outputs.skip != 'true' && steps.cache.outputs.reuse != 'true'
         id: audit
         shell: bash
         # Untrusted PR title/branch values come in via env: (below), NEVER interpolated
@@ -293,6 +319,27 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            // #337: a cache hit means the audit step was skipped on purpose (its `if:` excludes
+            // this case), not that it failed — read the reuse verdict first, before falling
+            // through to the real-audit-outcome logic below.
+            const cacheReused = '${{ steps.cache.outputs.reuse }}' === 'true';
+            const cacheReason = ${{ toJSON(steps.cache.outputs.reason) }};
+            if (cacheReused) {
+              core.setOutput('status', 'approved');
+              const body = `✅ **Sam (CSO) — Automated Security Audit**\n\n`
+                + `APPROVED: reusing prior verdict — ${cacheReason}\n\n`
+                + `This PR's diff against \`${{ github.base_ref }}\` is byte-identical to the one `
+                + `already audited and approved, so the model audit was skipped rather than `
+                + `re-run. No new content to review since that verdict.`;
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: ${{ github.event.pull_request.number }},
+                body,
+                event: 'COMMENT',
+              });
+              return;
+            }
             // `continue-on-error: true` on the audit step means a step that dies before writing its
             // outputs still lets this one run, with `status` empty. Treat outcome==failure and any
             // unrecognised value as `error` — never let an unset output fall through to the
@@ -347,6 +394,21 @@ jobs:
               body: `${emoji} **Sam (CSO) — Automated Security Audit**\n\n${result}`,
               event: event,
             });
+
+      # #337: only recorded after a genuine fresh audit approved — a reuse hit doesn't re-derive
+      # anything new to cache, and skipping the write there avoids re-stamping the entry's
+      # runId/auditedAt on every reused run for no benefit.
+      - name: Record audit verdict in diff-hash cache
+        if: steps.review.outputs.status == 'approved' && steps.cache.outputs.reuse != 'true'
+        shell: bash
+        run: |
+          NODE="${{ steps.tools.outputs.node_path }}"
+          "$NODE" "${{ github.workspace }}/tools/sam-audit-cache.js" record \
+            --pr "${{ github.event.pull_request.number }}" \
+            --base-ref "${{ github.base_ref }}" \
+            --diff-file "$RUNNER_TEMP/pr-diff-full.txt" \
+            --run-id "${{ github.run_id }}" \
+            || echo "::warning::could not record the sam-audit-cache entry for PR ${{ github.event.pull_request.number }}"
 
       # #295: this step used to post a fixed sentence claiming both that tests were passing and
       # that the PR was ready to merge, from a condition that read `steps.audit.outputs.status`

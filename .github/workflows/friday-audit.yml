@@ -2,9 +2,16 @@ name: Friday Engineering Audit
 
 # #164: Friday's audit is informational-only and runs once per PR, on open, not on every push
 # (pr-auto-review / cavecrew-reviewer is retired — this is now the single engineering reviewer).
+# #337: `opened` alone fires for a draft PR too (draft is a PR state, not a separate event), which
+# spent a model session auditing code the author has explicitly said is not ready. `ready_for_review`
+# is added so a PR opened as a draft still gets audited once, on the draft->ready transition; the
+# job-level `if:` below skips the `opened` firing for drafts so it isn't audited twice (once as a
+# draft, once again on ready_for_review). Unlike sam-audit.yml, this check is NOT a required status
+# check on main, so a plain job-level skip (producing a `skipped` conclusion) is safe here — there
+# is no #228-style "skipped counts as satisfied" bypass risk for a check nothing gates on.
 on:
   pull_request:
-    types: [opened]
+    types: [opened, ready_for_review]
     branches: [main, dev]
     paths-ignore:
       - 'docs/**'
@@ -24,9 +31,13 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
-    # Skip PRs labeled `spec` (design/spec discussion, not mergeable code).
+    # Skip PRs labeled `spec` (design/spec discussion, not mergeable code). Skip a draft PR on its
+    # `opened` firing (#337) — it will be audited once for real on `ready_for_review` instead. This
+    # is safe to skip at job level (not step level, unlike sam-audit.yml) because this check is not
+    # a required status check on main.
     if: >-
-      !contains(github.event.pull_request.labels.*.name, 'spec')
+      !contains(github.event.pull_request.labels.*.name, 'spec') &&
+      !(github.event.action == 'opened' && github.event.pull_request.draft)
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
